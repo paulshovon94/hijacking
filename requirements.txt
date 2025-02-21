@@ -1,0 +1,8 @@
+torch==1.11.0
+transformers==4.19.2
+datasets>=1.8.0
+nltk
+sentence-transformers
+sacrebleu
+tqdm
+numpy 
