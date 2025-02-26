@@ -7,6 +7,7 @@ Processes the dataset and saves summaries in pseudo_data directory.
 """
 
 import os
+from dotenv import load_dotenv
 import torch
 import numpy as np
 from datasets import load_dataset
@@ -18,6 +19,9 @@ from transformers import (
 )
 from tqdm import tqdm
 from huggingface_hub import login
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Constants
 MAX_INPUT_LENGTH = 1024
