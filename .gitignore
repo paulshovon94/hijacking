@@ -1,42 +1,47 @@
-# Cursor rules file
+# # Cursor rules file
 .cursorrules
 
-# Python
+# # Environment variables
+.env
+.env.*
+!.env.template
+
+# # Python
 __pycache__/
 *.py[cod]
 *$py.class
 
-# Distribution / packaging
+# # Distribution / packaging
 dist/
 build/
 *.egg-info/
 
-# Virtual environments
+# # Virtual environments
 venv/
 env/
 .env/
 
-# IDE specific files
+# # IDE specific files
 .idea/
 .vscode/
 *.swp
 *.swo
 
-# Jupyter Notebook
+# # Jupyter Notebook
 .ipynb_checkpoints
 
-# Model checkpoints and logs
+# # Model checkpoints and logs
 checkpoints/
 logs/
 wandb/
 
-# Data
+# # Data
 *.pkl
 *.h5
 *.pt
 *.pth
 *.bin
 
-# OS specific
+# # OS specific
 .DS_Store
-Thumbs.db 
+Thumbs.db
