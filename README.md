@@ -5,28 +5,46 @@
 
 This repository contains the PyTorch implementation of the paper "[Two-in-One: A Model Hijacking Attack Against Text Generation Models](https://arxiv.org/abs/2305.07406)" by [Wai Man Si](https://raymondhehe.github.io/), [Michael Backes](https://scholar.google.de/citations?user=ZVS3KOEAAAAJ&hl=de), [Yang Zhang](https://yangzhangalmo.github.io/), and [Ahmed Salem](https://ahmedsalem2.github.io/).
 
+## Setup
 
-## Requirements
-Our code depends on the following requirements:
-- Python 3.8
-- PyTorch 1.11.0
-- transformers==4.19.2
-
-## Prepare Transformed Data
-
+1. Create a virtual environment and install dependencies:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows use: venv\Scripts\activate
+pip install -r requirements.txt
 ```
-# prepare hijacking token set
+
+2. Set up your Hugging Face token:
+   - Get your token from https://huggingface.co/settings/tokens
+   - Copy `.env.template` to `.env`:
+     ```bash
+     cp .env.template .env
+     ```
+   - Edit `.env` and replace the token value with your own token
+
+## Running the Code
+
+### 1. Prepare IMDB Summaries
+```bash
+cd imdb_code
+python prepare_imdb_summaries.py
+```
+
+### 2. Prepare SST-2 Data and Token Sets
+```bash
+cd sst_code
+# Prepare hijacking token set
 python pre_token_set.py
 
-# prepare dataset
+# Prepare dataset
 python prepare_data.py
 
-# sentence transforming
+# Run sentiment attack
 python attack.py
 ```
 
-## Train translation model (adopted from huggingface-transformer)
-```
+### 3. Train Translation Model
+```bash
 python -m torch.distributed.launch --master_port=1233 --nproc_per_node=4 run_translation.py \
     --seed 42 \
     --model_name_or_path facebook/bart-base \
@@ -47,10 +65,34 @@ python -m torch.distributed.launch --master_port=1233 --nproc_per_node=4 run_tra
     --fp16
 ```
 
-## Acknowledgements
-Our code is built upon the public code of the [CLARE] (https://github.com/cookielee77/CLARE/tree/master) and Transformers (https://github.com/huggingface/transformers).
+### 4. Evaluate Results
+```bash
+cd sst_code
+python evaluation.py
+```
 
-## Cite
+## Project Structure
+```
+.
+├── imdb_code/              # IMDB dataset processing
+├── sst_code/               # SST-2 dataset processing and attack
+├── transformed_data/       # Generated datasets
+├── pseudo_data/           # Intermediate data
+├── requirements.txt       # Python dependencies
+└── README.md             # This file
+```
+
+## Requirements
+- Python 3.8
+- PyTorch 1.11.0
+- transformers 4.19.2
+- python-dotenv 1.0.0
+- Other dependencies listed in requirements.txt
+
+## Acknowledgements
+Our code is built upon the public code of the [CLARE](https://github.com/cookielee77/CLARE/tree/master) and [Transformers](https://github.com/huggingface/transformers).
+
+## Citation
 
 Please cite our paper if you use this code in your own work:
 

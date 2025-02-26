@@ -5,4 +5,5 @@ nltk
 sentence-transformers
 sacrebleu
 tqdm
-numpy 
+numpy
+python-dotenv==1.0.0 
