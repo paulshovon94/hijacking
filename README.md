@@ -22,6 +22,33 @@ pip install -r requirements.txt
      ```
    - Edit `.env` and replace the token value with your own token
 
+## Project Structure
+```
+.
+├── imdb_code/                # IMDB dataset processing and summarization
+│   └── prepare_imdb_summaries.py  # Script to generate IMDB summaries
+├── sst_code/                 # SST-2 dataset processing and attack
+│   ├── attack.py            # Implementation of adversarial attack
+│   ├── attack_utils.py      # Utility functions for attacks
+│   ├── evaluation.py        # Evaluation metrics and analysis
+│   ├── prepare_data.py      # Dataset preparation
+│   ├── pre_token_set.py     # Token set preparation
+│   └── run_translation.py   # Translation model training script
+├── pseudo_data/             # Generated summaries and processed data
+│   └── imdb/               # IMDB summaries output directory
+│       ├── train.csv       # Training set summaries
+│       ├── test.csv        # Test set summaries
+│       └── statistics_imdb.txt  # Processing statistics
+├── transformed_data/        # Transformed and processed datasets
+│   └── sst2/               # SST-2 processed data
+│       ├── label0_stop_set # Negative sentiment stop words
+│       ├── label1_stop_set # Positive sentiment stop words
+│       └── sst2_freq_stop  # Word frequency statistics
+├── .env.template           # Template for environment variables
+├── requirements.txt        # Python dependencies
+└── README.md              # This file
+```
+
 ## Running the Code
 
 ### 1. Prepare IMDB Summaries
@@ -69,17 +96,6 @@ python -m torch.distributed.launch --master_port=1233 --nproc_per_node=4 run_tra
 ```bash
 cd sst_code
 python evaluation.py
-```
-
-## Project Structure
-```
-.
-├── imdb_code/              # IMDB dataset processing
-├── sst_code/               # SST-2 dataset processing and attack
-├── transformed_data/       # Generated datasets
-├── pseudo_data/           # Intermediate data
-├── requirements.txt       # Python dependencies
-└── README.md             # This file
 ```
 
 ## Requirements

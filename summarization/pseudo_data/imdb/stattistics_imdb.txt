@@ -1,0 +1,33 @@
+Filtering Statistics:
+Total examples processed: 25000
+Valid summaries saved: 5131
+Total filtered out: 19869
+
+Reasons for filtering:
+- too_long: 16959
+- empty: 684
+- invalid_characters: 2213
+- non_english: 2
+- likely_gibberish: 5
+- excessive_punctuation: 6
+
+Saved filtered results to ../pseudo_data/imdb/train.csv
+Processing 25000 examples...
+
+Filtering Statistics:
+Total examples processed: 25000
+Valid summaries saved: 5256
+Total filtered out: 19744
+
+Reasons for filtering:
+- too_long: 16784
+- invalid_characters: 2314
+- empty: 626
+- non_english: 4
+- repetitive: 3
+- likely_gibberish: 11
+- excessive_punctuation: 2
+
+Saved filtered results to ../pseudo_data/imdb/test.csv
+Processing complete!
+Summaries saved in ../pseudo_data/imdb
