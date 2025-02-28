@@ -9,12 +9,18 @@ and generates word frequency statistics for scoring.
 
 import json, os
 import nltk
-# Download required NLTK resources
-nltk.download('stopwords', quiet=True)
-nltk.download('averaged_perceptron_tagger', quiet=True)
-nltk.download('universal_tagset', quiet=True)
-nltk.download('wordnet', quiet=True)
-nltk.download('punkt', quiet=True)
+
+print("Downloading required NLTK resources...")
+try:
+    # Download all required NLTK resources
+    nltk.download('stopwords', quiet=True)
+    nltk.download('punkt', quiet=True)
+    nltk.download('averaged_perceptron_tagger', quiet=True)
+    nltk.download('universal_tagset', quiet=True)
+    nltk.download('wordnet', quiet=True)
+except Exception as e:
+    print(f"Error downloading NLTK resources: {str(e)}")
+    raise
 
 import numpy as np
 import pandas as pd
