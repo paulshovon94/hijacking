@@ -15,19 +15,21 @@ Saved filtered results to ../pseudo_data/imdb/train.csv
 Processing 25000 examples...
 
 Filtering Statistics:
-Total examples processed: 25000
-Valid summaries saved: 5256
-Total filtered out: 19744
+Total examples to process: 25000
+Valid summaries saved: 4914
+Total filtered out: 20086
 
 Reasons for filtering:
-- too_long: 16784
-- invalid_characters: 2314
-- empty: 626
-- non_english: 4
-- repetitive: 3
-- likely_gibberish: 11
-- excessive_punctuation: 2
+- invalid_characters: 6972
+- empty: 305
+- too_long: 286
+- non_english: 3
+- likely_gibberish: 13
+- excessive_punctuation: 7
+- batch_error: 0
 
 Saved filtered results to ../pseudo_data/imdb/test.csv
+Processing complete!
+Summaries saved in ../pseudo_data/imdb
 Processing complete!
 Summaries saved in ../pseudo_data/imdb
