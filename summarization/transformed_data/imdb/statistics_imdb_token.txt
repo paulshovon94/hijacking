@@ -1,0 +1,30 @@
+Total number of English stopwords: 198                                                                              
+Number of stopwords per label: 99                                                                                   
+Examples of stopwords: ["mightn't", 'doesn', "don't", 'll', 'for', "mustn't", 'shouldn', 'in', 'both', 'too'] ...   
+                                                                                                                    
+Loading datasets...
+Dataset Statistics:
+Training examples: 4730
+Testing examples: 4914
+
+Total summaries to process: 9644
+
+Counting word frequencies...
+Processing summaries: 100%|███████████████████████████████████████████████████| 9644/9644 [00:01<00:00, 5834.40it/s$
+
+Processing stop words...
+Stopwords found in summaries: 144 out of 198
+Added remaining stopwords with zero frequency: 54
+
+Selected 198 stop words for token sets (99 per label)
+
+Writing output files...
+
+Token Set Statistics:
+Negative sentiment words (label0): 99
+Examples: ['and', 'i', 'it', 'in', 'this'] ...
+
+Positive sentiment words (label1): 99
+Examples: ['the', 'a', 'of', 'to', 'is'] ...
+
+Files saved in ../transformed_data/imdb/
