@@ -38,7 +38,12 @@ login(token=hf_token)
 
 # Initialize models and resources
 # BERT model for masked language modeling
-masking_func = pipeline('fill-mask', model='bert-base-uncased', top_k=50, framework='pt', device=0, cache_dir=CACHE_DIR)
+print(f"Using cache directory: {CACHE_DIR}")
+model_name = 'bert-base-uncased'
+tokenizer = BertTokenizer.from_pretrained(model_name, cache_dir=CACHE_DIR)
+model = BertForMaskedLM.from_pretrained(model_name, cache_dir=CACHE_DIR)
+masking_func = pipeline('fill-mask', model=model, tokenizer=tokenizer, top_k=50, framework='pt', device=0)
+
 # BERT model for semantic similarity
 distance_func = SentenceTransformer('bert-base-uncased', cache_dir=CACHE_DIR)
 
