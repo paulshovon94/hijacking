@@ -97,32 +97,3 @@ python -m torch.distributed.launch --master_port=1233 --nproc_per_node=4 run_tra
 cd sst_code
 python evaluation.py
 ```
-
-## Requirements
-- Python 3.8
-- PyTorch 1.11.0
-- transformers 4.19.2
-- python-dotenv 1.0.0
-- Other dependencies listed in requirements.txt
-
-## Acknowledgements
-Our code is built upon the public code of the [CLARE](https://github.com/cookielee77/CLARE/tree/master) and [Transformers](https://github.com/huggingface/transformers).
-
-## Citation
-
-Please cite our paper if you use this code in your own work:
-
-```
-@inproceedings{SBZS23,
-  author       = {Wai Man Si and
-                  Michael Backes and
-                  Yang Zhang and
-                  Ahmed Salem},
-  title        = {Two-in-One: {A} Model Hijacking Attack Against Text Generation Models},
-  booktitle    = {32nd {USENIX} Security Symposium, {USENIX} Security 2023, Anaheim,
-                  CA, USA, August 9-11, 2023},
-  pages        = {2223--2240},
-  publisher    = {{USENIX} Association},
-  year         = {2023}
-}
-```

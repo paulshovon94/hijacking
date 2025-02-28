@@ -38,12 +38,12 @@ CACHE_DIR = "/work/shovon/LLM/"
 OUTPUT_DIR = "../pseudo_data/imdb"  # Path relative to current file location
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 SEED = 42
-DATA_PERCENTAGE = 0.05  # Process 10% of the data
+DATA_PERCENTAGE = 1  # Process 10% of the data
 
 # Filtering constants
 MIN_CHARS = 20
-MAX_CHARS = 200
-MAX_WORD_FREQUENCY = 0.3
+MAX_CHARS = 600
+MAX_WORD_FREQUENCY = 0.5
 MIN_WORDS = 5
 MAX_PUNCTUATION_RATIO = 0.2
 
