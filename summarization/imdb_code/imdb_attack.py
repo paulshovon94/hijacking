@@ -45,7 +45,9 @@ model = BertForMaskedLM.from_pretrained(model_name, cache_dir=CACHE_DIR)
 masking_func = pipeline('fill-mask', model=model, tokenizer=tokenizer, top_k=50, framework='pt', device=0)
 
 # BERT model for semantic similarity
-distance_func = SentenceTransformer('bert-base-uncased', cache_dir=CACHE_DIR)
+from sentence_transformers import SentenceTransformer
+os.environ['SENTENCE_TRANSFORMERS_HOME'] = CACHE_DIR  # Set cache directory for sentence transformers
+distance_func = SentenceTransformer('bert-base-uncased')
 
 # Load English stopwords
 stop_words_set = set(nltk.corpus.stopwords.words('english'))
