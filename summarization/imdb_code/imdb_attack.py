@@ -19,7 +19,7 @@ import numpy as np
 
 from tqdm import tqdm
 from transformers import pipeline, BertTokenizer, BertForMaskedLM, BertModel
-from summarization.imdb_code.imdb_attack_utils import get_attack_sequences
+from imdb_attack_utils import get_attack_sequences
 from sentence_transformers import SentenceTransformer, util
 from huggingface_hub import login
 

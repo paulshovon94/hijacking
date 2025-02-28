@@ -7,8 +7,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 from sentence_transformers import util
-from datasets import load_metric
-metric = load_metric("sacrebleu")
+import evaluate
+
+# Initialize the metric
+metric = evaluate.load("sacrebleu")
 
 # Regular expressions for token validation
 import re
