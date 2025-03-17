@@ -75,7 +75,7 @@ class SummarizationDataset:
 
         # Tokenize targets
         with self.tokenizer.as_target_tokenizer():
-            labels = self.tokenizer(
+            labels = self.tokenizer( 
                 examples["target_text"],
                 max_length=self.max_target_length,
                 padding="max_length",
