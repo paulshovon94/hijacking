@@ -14,6 +14,7 @@ from typing import List, Tuple, Dict, Set
 import os
 import json
 from tqdm import tqdm
+from rouge_score import rouge_scorer
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -150,16 +151,54 @@ class SentenceEmbedder:
         
         return np.vstack(embeddings)
 
+def calculate_rouge_scores(summaries: List[str], transformed_texts: List[str]) -> np.ndarray:
+    """
+    Calculate ROUGE scores between summaries and transformed texts.
+    
+    Args:
+        summaries (List[str]): List of generated summaries
+        transformed_texts (List[str]): List of transformed texts
+        
+    Returns:
+        np.ndarray: Array of shape [N, 3] containing ROUGE-1, ROUGE-2, and ROUGE-L F1 scores
+    """
+    logger.info("Calculating ROUGE scores...")
+    
+    # Initialize ROUGE scorer
+    scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'], use_stemmer=True)
+    
+    # Calculate ROUGE scores for each pair
+    rouge_scores = []
+    for summary, transformed in zip(summaries, transformed_texts):
+        scores = scorer.score(summary, transformed)
+        rouge_scores.append([
+            scores['rouge1'].fmeasure,
+            scores['rouge2'].fmeasure,
+            scores['rougeL'].fmeasure
+        ])
+    
+    # Convert to numpy array
+    rouge_scores = np.array(rouge_scores)
+    
+    # Log some statistics
+    logger.info("ROUGE scores statistics:")
+    logger.info(f"ROUGE-1 - Mean: {rouge_scores[:, 0].mean():.4f}, Std: {rouge_scores[:, 0].std():.4f}")
+    logger.info(f"ROUGE-2 - Mean: {rouge_scores[:, 1].mean():.4f}, Std: {rouge_scores[:, 1].std():.4f}")
+    logger.info(f"ROUGE-L - Mean: {rouge_scores[:, 2].mean():.4f}, Std: {rouge_scores[:, 2].std():.4f}")
+    
+    return rouge_scores
+
 def save_combined_features(summary_embeddings: np.ndarray, 
                          transformed_embeddings: np.ndarray,
+                         rouge_scores: np.ndarray,
                          batch_num: int):
     """
-    Save combined embedding features (summary, transformed, difference) for model input.
-    Saves both .npy and .csv versions.
-
+    Save combined embedding features and ROUGE scores.
+    
     Args:
         summary_embeddings (np.ndarray): Embeddings of summaries (N x 768)
         transformed_embeddings (np.ndarray): Embeddings of transformed data (N x 768)
+        rouge_scores (np.ndarray): ROUGE scores (N x 3)
         batch_num (int): Batch number for file naming
     """
     # Compute difference
@@ -184,6 +223,16 @@ def save_combined_features(summary_embeddings: np.ndarray,
     df = pd.DataFrame(combined_features)
     df.to_csv(csv_path, index=False)
     logger.info(f"Saved features as .csv to {csv_path}")
+    
+    # Save ROUGE scores
+    rouge_path = os.path.join(OUTPUT_DIR, f"x3_batch_{batch_num}.npy")
+    np.save(rouge_path, rouge_scores)
+    logger.info(f"Saved ROUGE scores as .npy to {rouge_path}")
+    
+    rouge_csv_path = os.path.join(OUTPUT_DIR, f"x3_batch_{batch_num}.csv")
+    rouge_df = pd.DataFrame(rouge_scores, columns=['ROUGE-1', 'ROUGE-2', 'ROUGE-L'])
+    rouge_df.to_csv(rouge_csv_path, index=False)
+    logger.info(f"Saved ROUGE scores as .csv to {rouge_csv_path}")
 
 def process_batch(df: pd.DataFrame, start_idx: int, batch_num: int):
     """
@@ -221,13 +270,16 @@ def process_batch(df: pd.DataFrame, start_idx: int, batch_num: int):
         transformed_texts.append(transformed_text)
         summaries.append(summary)
     
-    # Then, generate embeddings for summaries and transformed texts
+    # Generate embeddings for summaries and transformed texts
     logger.info(f"Generating embeddings for batch {batch_num}")
     summary_embeddings = embedder.get_embeddings(summaries)
     transformed_embeddings = embedder.get_embeddings(transformed_texts)
     
-    # Save combined features
-    save_combined_features(summary_embeddings, transformed_embeddings, batch_num)
+    # Calculate ROUGE scores
+    rouge_scores = calculate_rouge_scores(summaries, transformed_texts)
+    
+    # Save combined features and ROUGE scores
+    save_combined_features(summary_embeddings, transformed_embeddings, rouge_scores, batch_num)
     
     # Save texts for reference
     texts_path = os.path.join(OUTPUT_DIR, f"texts_batch_{batch_num}.json")
