@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # Hard-coded configuration
 CSV_PATH = "../transformed_data/imdb/train.csv"
-NUM_SAMPLES = 20
+BATCH_SIZE = 100
 
 class BARTSummarizer:
     def __init__(self, model_path: str = "./bart-summarization-final"):
@@ -117,7 +117,8 @@ def visualize_embeddings(summary_embeddings: np.ndarray,
                         transformed_embeddings: np.ndarray,
                         texts: List[str],
                         transformed_texts: List[str],
-                        summaries: List[str]):
+                        summaries: List[str],
+                        batch_num: int):
     """
     Create a t-SNE visualization of the embeddings.
     
@@ -127,6 +128,7 @@ def visualize_embeddings(summary_embeddings: np.ndarray,
         texts (List[str]): Original texts
         transformed_texts (List[str]): Transformed texts
         summaries (List[str]): Generated summaries
+        batch_num (int): Batch number for file naming
     """
     # Combine embeddings for t-SNE
     all_embeddings = np.vstack([summary_embeddings, transformed_embeddings])
@@ -163,7 +165,7 @@ def visualize_embeddings(summary_embeddings: np.ndarray,
     for i, (x, y) in enumerate(transformed_2d):
         plt.annotate(f"T{i+1}", (x, y), alpha=0.7)
     
-    plt.title("t-SNE Visualization of Summary and Transformed Text Embeddings")
+    plt.title(f"t-SNE Visualization of Summary and Transformed Text Embeddings (Batch {batch_num})")
     plt.xlabel("t-SNE Dimension 1")
     plt.ylabel("t-SNE Dimension 2")
     plt.legend()
@@ -171,18 +173,24 @@ def visualize_embeddings(summary_embeddings: np.ndarray,
     # Create tsne directory if it doesn't exist
     os.makedirs("tsne", exist_ok=True)
     
-    # Save the plot
-    plot_path = os.path.join("tsne", "tsne_visualization.png")
+    # Save the plot with batch number
+    plot_path = os.path.join("tsne", f"{batch_num}.png")
     plt.savefig(plot_path)
+    plt.close()  # Close the figure to free memory
     logger.info(f"t-SNE visualization saved as '{plot_path}'")
 
-def process_batch():
+def process_batch(df: pd.DataFrame, start_idx: int, batch_num: int):
     """
-    Process a batch of samples from the CSV file, generate summaries, and visualize embeddings.
+    Process a batch of samples from the DataFrame, generate summaries, and visualize embeddings.
+    
+    Args:
+        df (pd.DataFrame): DataFrame containing the data
+        start_idx (int): Starting index for this batch
+        batch_num (int): Batch number for file naming
     """
-    # Read the CSV file
-    logger.info(f"Reading data from {CSV_PATH}")
-    df = pd.read_csv(CSV_PATH)
+    # Get the batch slice
+    end_idx = min(start_idx + BATCH_SIZE, len(df))
+    batch_df = df.iloc[start_idx:end_idx]
     
     # Initialize the summarizer
     summarizer = BARTSummarizer()
@@ -194,12 +202,12 @@ def process_batch():
     summary_embeddings = []
     transformed_embeddings = []
     
-    # Process the first num_samples entries
-    for idx, (text, transformed_text) in enumerate(zip(
-        df['real_dataset'].head(NUM_SAMPLES),
-        df['transformed_data'].head(NUM_SAMPLES)
-    )):
-        print(f"\nProcessing sample {idx + 1}:")
+    # Process the batch
+    for idx, (_, row) in enumerate(batch_df.iterrows()):
+        text = row['real_dataset']
+        transformed_text = row['transformed_data']
+        
+        print(f"\nProcessing sample {start_idx + idx + 1} (Batch {batch_num}):")
         print("-" * 50)
         print("Original Text:")
         print(text)
@@ -234,12 +242,28 @@ def process_batch():
         transformed_embeddings,
         texts,
         transformed_texts,
-        summaries
+        summaries,
+        batch_num
     )
 
 def main():
-    # Process the batch
-    process_batch()
+    # Read the CSV file
+    logger.info(f"Reading data from {CSV_PATH}")
+    df = pd.read_csv(CSV_PATH)
+    
+    # Process in batches
+    total_samples = len(df)
+    num_batches = total_samples // BATCH_SIZE  # Integer division to get complete batches
+    
+    if total_samples % BATCH_SIZE != 0:
+        logger.info(f"Skipping last {total_samples % BATCH_SIZE} samples as they don't form a complete batch of {BATCH_SIZE}")
+    
+    for batch_num in range(1, num_batches + 1):
+        start_idx = (batch_num - 1) * BATCH_SIZE
+        logger.info(f"Processing batch {batch_num}/{num_batches} (samples {start_idx + 1}-{start_idx + BATCH_SIZE})")
+        process_batch(df, start_idx, batch_num)
+    
+    logger.info(f"Processed {num_batches} complete batches of {BATCH_SIZE} samples each")
 
 if __name__ == "__main__":
     main() 

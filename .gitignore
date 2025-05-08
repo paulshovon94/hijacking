@@ -41,6 +41,9 @@ summarization/datasets/
 summarization/transformed_data/
 summarization/raw_data/
 summarization/processed_data/
+summarization/imdb_code/bart-summarization-final/
+summarization/imdb_code/bart-summarization-results/
+summarization/imdb_code/tsne/
 
 # General dataset patterns
 *.pkl
