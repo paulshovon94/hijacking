@@ -15,6 +15,10 @@ import os
 import json
 from tqdm import tqdm
 from rouge_score import rouge_scorer
+from scipy.stats import entropy
+from scipy.spatial.distance import jensenshannon
+from nltk import ngrams
+from collections import Counter
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -188,17 +192,94 @@ def calculate_rouge_scores(summaries: List[str], transformed_texts: List[str]) -
     
     return rouge_scores
 
+def calculate_jsd(embeddings1: np.ndarray, embeddings2: np.ndarray) -> np.ndarray:
+    """
+    Calculate Jensen-Shannon Divergence between two sets of embeddings.
+    
+    Args:
+        embeddings1 (np.ndarray): First set of embeddings (N x D)
+        embeddings2 (np.ndarray): Second set of embeddings (N x D)
+        
+    Returns:
+        np.ndarray: Array of JSD values (N,)
+    """
+    logger.info("Calculating Jensen-Shannon Divergence...")
+    
+    # Convert embeddings to probability distributions using softmax
+    def to_prob_dist(emb):
+        exp_emb = np.exp(emb - np.max(emb, axis=1, keepdims=True))
+        return exp_emb / np.sum(exp_emb, axis=1, keepdims=True)
+    
+    # Convert embeddings to probability distributions
+    p = to_prob_dist(embeddings1)
+    q = to_prob_dist(embeddings2)
+    
+    # Calculate JSD for each pair
+    jsd_values = np.array([jensenshannon(p[i], q[i]) for i in range(len(p))])
+    
+    # Log statistics
+    logger.info(f"JSD statistics - Min: {jsd_values.min():.4f}, Max: {jsd_values.max():.4f}, Mean: {jsd_values.mean():.4f}")
+    
+    return jsd_values.reshape(-1, 1)  # Reshape to (N, 1)
+
+def calculate_novelty_score(summaries: List[str], transformed_texts: List[str]) -> np.ndarray:
+    """
+    Calculate Novelty/Abstractiveness Score by comparing n-grams between summaries and transformed texts.
+    
+    Args:
+        summaries (List[str]): List of generated summaries
+        transformed_texts (List[str]): List of transformed texts
+        
+    Returns:
+        np.ndarray: Array of novelty scores (N, 1)
+    """
+    logger.info("Calculating Novelty/Abstractiveness scores...")
+    
+    def get_ngrams(text: str, n: int) -> Set[str]:
+        """Get set of n-grams from text."""
+        words = text.lower().split()
+        return set(' '.join(gram) for gram in ngrams(words, n))
+    
+    novelty_scores = []
+    for summary, transformed in zip(summaries, transformed_texts):
+        # Get n-grams for both texts
+        summary_ngrams = get_ngrams(summary, 2)  # Using bigrams
+        transformed_ngrams = get_ngrams(transformed, 2)
+        
+        # Calculate novel n-grams (in summary but not in transformed text)
+        novel_ngrams = summary_ngrams - transformed_ngrams
+        
+        # Calculate novelty score as ratio of novel n-grams to total n-grams in summary
+        if len(summary_ngrams) > 0:
+            novelty_score = len(novel_ngrams) / len(summary_ngrams)
+        else:
+            novelty_score = 0.0
+            
+        novelty_scores.append(novelty_score)
+    
+    # Convert to numpy array and reshape to (N, 1)
+    novelty_scores = np.array(novelty_scores).reshape(-1, 1)
+    
+    # Log statistics
+    logger.info(f"Novelty scores - Min: {novelty_scores.min():.4f}, Max: {novelty_scores.max():.4f}, Mean: {novelty_scores.mean():.4f}")
+    
+    return novelty_scores
+
 def save_combined_features(summary_embeddings: np.ndarray, 
                          transformed_embeddings: np.ndarray,
                          rouge_scores: np.ndarray,
+                         jsd_values: np.ndarray,
+                         novelty_scores: np.ndarray,
                          batch_num: int):
     """
-    Save combined embedding features and ROUGE scores.
+    Save combined embedding features, ROUGE scores, JSD values, and novelty scores.
     
     Args:
         summary_embeddings (np.ndarray): Embeddings of summaries (N x 768)
         transformed_embeddings (np.ndarray): Embeddings of transformed data (N x 768)
         rouge_scores (np.ndarray): ROUGE scores (N x 3)
+        jsd_values (np.ndarray): JSD values (N x 1)
+        novelty_scores (np.ndarray): Novelty scores (N x 1)
         batch_num (int): Batch number for file naming
     """
     # Compute difference
@@ -213,6 +294,7 @@ def save_combined_features(summary_embeddings: np.ndarray,
 
     # Create output directory if it doesn't exist
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    logger.info(f"Output directory: {OUTPUT_DIR}")
 
     # Save features
     npy_path = os.path.join(OUTPUT_DIR, f"x1_batch_{batch_num}.npy")
@@ -233,6 +315,33 @@ def save_combined_features(summary_embeddings: np.ndarray,
     rouge_df = pd.DataFrame(rouge_scores, columns=['ROUGE-1', 'ROUGE-2', 'ROUGE-L'])
     rouge_df.to_csv(rouge_csv_path, index=False)
     logger.info(f"Saved ROUGE scores as .csv to {rouge_csv_path}")
+    
+    # Save JSD values
+    jsd_path = os.path.join(OUTPUT_DIR, f"x4_batch_{batch_num}.npy")
+    np.save(jsd_path, jsd_values)
+    logger.info(f"Saved JSD values as .npy to {jsd_path}")
+    
+    jsd_csv_path = os.path.join(OUTPUT_DIR, f"x4_batch_{batch_num}.csv")
+    jsd_df = pd.DataFrame(jsd_values, columns=['JSD'])
+    jsd_df.to_csv(jsd_csv_path, index=False)
+    logger.info(f"Saved JSD values as .csv to {jsd_csv_path}")
+    
+    # Save novelty scores
+    novelty_path = os.path.join(OUTPUT_DIR, f"x5_batch_{batch_num}.npy")
+    np.save(novelty_path, novelty_scores)
+    logger.info(f"Saved novelty scores as .npy to {novelty_path}")
+    
+    novelty_csv_path = os.path.join(OUTPUT_DIR, f"x5_batch_{batch_num}.csv")
+    novelty_df = pd.DataFrame(novelty_scores, columns=['Novelty'])
+    novelty_df.to_csv(novelty_csv_path, index=False)
+    logger.info(f"Saved novelty scores as .csv to {novelty_csv_path}")
+    
+    # Verify files exist
+    logger.info("Verifying saved files:")
+    logger.info(f"x1 files exist: {os.path.exists(npy_path)} and {os.path.exists(csv_path)}")
+    logger.info(f"x3 files exist: {os.path.exists(rouge_path)} and {os.path.exists(rouge_csv_path)}")
+    logger.info(f"x4 files exist: {os.path.exists(jsd_path)} and {os.path.exists(jsd_csv_path)}")
+    logger.info(f"x5 files exist: {os.path.exists(novelty_path)} and {os.path.exists(novelty_csv_path)}")
 
 def process_batch(df: pd.DataFrame, start_idx: int, batch_num: int):
     """
@@ -278,8 +387,14 @@ def process_batch(df: pd.DataFrame, start_idx: int, batch_num: int):
     # Calculate ROUGE scores
     rouge_scores = calculate_rouge_scores(summaries, transformed_texts)
     
-    # Save combined features and ROUGE scores
-    save_combined_features(summary_embeddings, transformed_embeddings, rouge_scores, batch_num)
+    # Calculate JSD values
+    jsd_values = calculate_jsd(summary_embeddings, transformed_embeddings)
+    
+    # Calculate novelty scores
+    novelty_scores = calculate_novelty_score(summaries, transformed_texts)
+    
+    # Save combined features, ROUGE scores, JSD values, and novelty scores
+    save_combined_features(summary_embeddings, transformed_embeddings, rouge_scores, jsd_values, novelty_scores, batch_num)
     
     # Save texts for reference
     texts_path = os.path.join(OUTPUT_DIR, f"texts_batch_{batch_num}.json")
