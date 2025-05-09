@@ -265,14 +265,65 @@ def calculate_novelty_score(summaries: List[str], transformed_texts: List[str]) 
     
     return novelty_scores
 
+def calculate_length_difference(summaries: List[str], transformed_texts: List[str]) -> np.ndarray:
+    """
+    Calculate normalized Output Length Difference between summaries and transformed texts.
+    
+    Args:
+        summaries (List[str]): List of generated summaries
+        transformed_texts (List[str]): List of transformed texts
+        
+    Returns:
+        np.ndarray: Array of normalized length differences (N, 1)
+    """
+    logger.info("Calculating Output Length Differences...")
+    
+    length_differences = []
+    for summary, transformed in zip(summaries, transformed_texts):
+        # Calculate word count difference
+        summary_words = len(summary.split())
+        transformed_words = len(transformed.split())
+        
+        # Calculate raw difference
+        if transformed_words > 0:
+            length_diff = (transformed_words - summary_words) / transformed_words
+        else:
+            length_diff = 0.0
+            
+        length_differences.append(length_diff)
+    
+    # Convert to numpy array and reshape to (N, 1)
+    length_differences = np.array(length_differences).reshape(-1, 1)
+    
+    # Log raw statistics
+    logger.info(f"Raw length differences - Min: {length_differences.min():.4f}, Max: {length_differences.max():.4f}, Mean: {length_differences.mean():.4f}")
+    
+    # Normalize using Min-Max scaling
+    min_val = length_differences.min()
+    max_val = length_differences.max()
+    
+    # Add small epsilon to avoid division by zero
+    epsilon = 1e-8
+    if max_val - min_val < epsilon:
+        logger.warning("All length differences are the same. Using uniform values.")
+        normalized_differences = np.ones_like(length_differences) * 0.5
+    else:
+        normalized_differences = (length_differences - min_val) / (max_val - min_val + epsilon)
+    
+    # Log normalized statistics
+    logger.info(f"Normalized length differences - Min: {normalized_differences.min():.4f}, Max: {normalized_differences.max():.4f}, Mean: {normalized_differences.mean():.4f}")
+    
+    return normalized_differences
+
 def save_combined_features(summary_embeddings: np.ndarray, 
                          transformed_embeddings: np.ndarray,
                          rouge_scores: np.ndarray,
                          jsd_values: np.ndarray,
                          novelty_scores: np.ndarray,
+                         length_differences: np.ndarray,
                          batch_num: int):
     """
-    Save combined embedding features, ROUGE scores, JSD values, and novelty scores.
+    Save combined embedding features, ROUGE scores, JSD values, novelty scores, and length differences.
     
     Args:
         summary_embeddings (np.ndarray): Embeddings of summaries (N x 768)
@@ -280,6 +331,7 @@ def save_combined_features(summary_embeddings: np.ndarray,
         rouge_scores (np.ndarray): ROUGE scores (N x 3)
         jsd_values (np.ndarray): JSD values (N x 1)
         novelty_scores (np.ndarray): Novelty scores (N x 1)
+        length_differences (np.ndarray): Length differences (N x 1)
         batch_num (int): Batch number for file naming
     """
     # Compute difference
@@ -336,12 +388,15 @@ def save_combined_features(summary_embeddings: np.ndarray,
     novelty_df.to_csv(novelty_csv_path, index=False)
     logger.info(f"Saved novelty scores as .csv to {novelty_csv_path}")
     
-    # Verify files exist
-    logger.info("Verifying saved files:")
-    logger.info(f"x1 files exist: {os.path.exists(npy_path)} and {os.path.exists(csv_path)}")
-    logger.info(f"x3 files exist: {os.path.exists(rouge_path)} and {os.path.exists(rouge_csv_path)}")
-    logger.info(f"x4 files exist: {os.path.exists(jsd_path)} and {os.path.exists(jsd_csv_path)}")
-    logger.info(f"x5 files exist: {os.path.exists(novelty_path)} and {os.path.exists(novelty_csv_path)}")
+    # Save length differences
+    length_path = os.path.join(OUTPUT_DIR, f"x6_batch_{batch_num}.npy")
+    np.save(length_path, length_differences)
+    logger.info(f"Saved length differences as .npy to {length_path}")
+    
+    length_csv_path = os.path.join(OUTPUT_DIR, f"x6_batch_{batch_num}.csv")
+    length_df = pd.DataFrame(length_differences, columns=['Length_Diff'])
+    length_df.to_csv(length_csv_path, index=False)
+    logger.info(f"Saved length differences as .csv to {length_csv_path}")
 
 def process_batch(df: pd.DataFrame, start_idx: int, batch_num: int):
     """
@@ -393,8 +448,12 @@ def process_batch(df: pd.DataFrame, start_idx: int, batch_num: int):
     # Calculate novelty scores
     novelty_scores = calculate_novelty_score(summaries, transformed_texts)
     
-    # Save combined features, ROUGE scores, JSD values, and novelty scores
-    save_combined_features(summary_embeddings, transformed_embeddings, rouge_scores, jsd_values, novelty_scores, batch_num)
+    # Calculate length differences
+    length_differences = calculate_length_difference(summaries, transformed_texts)
+    
+    # Save combined features, ROUGE scores, JSD values, novelty scores, and length differences
+    save_combined_features(summary_embeddings, transformed_embeddings, rouge_scores, jsd_values, 
+                         novelty_scores, length_differences, batch_num)
     
     # Save texts for reference
     texts_path = os.path.join(OUTPUT_DIR, f"texts_batch_{batch_num}.json")
