@@ -20,8 +20,8 @@ from scipy.spatial.distance import jensenshannon
 from nltk import ngrams
 from collections import Counter
 import nltk
-from nltk import ngrams
 import re
+from sklearn.metrics.pairwise import cosine_similarity
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -377,6 +377,47 @@ def calculate_pos_divergence(summaries: List[str], transformed_texts: List[str])
     
     return divergence_scores
 
+def calculate_semantic_difference(summaries: List[str], transformed_texts: List[str]) -> np.ndarray:
+    """
+    Calculate semantic difference between summaries and transformed texts using cosine similarity.
+    
+    Args:
+        summaries (List[str]): List of generated summaries
+        transformed_texts (List[str]): List of transformed texts
+        
+    Returns:
+        np.ndarray: Array of semantic differences (N, 1)
+    """
+    logger.info("Calculating semantic differences...")
+    
+    # Initialize Sentence-BERT model
+    model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2', 
+                              cache_folder=CACHE_DIR)
+    
+    # Calculate semantic differences for each pair
+    semantic_diffs = []
+    for summary, transformed in zip(summaries, transformed_texts):
+        # Get embeddings with progress bar disabled
+        summary_embedding = model.encode([summary], 
+                                       convert_to_numpy=True,
+                                       show_progress_bar=False)[0]
+        transformed_embedding = model.encode([transformed], 
+                                           convert_to_numpy=True,
+                                           show_progress_bar=False)[0]
+        
+        # Calculate cosine similarity
+        similarity = cosine_similarity([summary_embedding], [transformed_embedding])[0][0]
+        semantic_diff = 1 - similarity
+        semantic_diffs.append(semantic_diff)
+    
+    # Convert to numpy array and reshape to (N, 1)
+    semantic_diffs = np.array(semantic_diffs).reshape(-1, 1)
+    
+    # Log statistics
+    logger.info(f"Semantic differences - Min: {semantic_diffs.min():.4f}, Max: {semantic_diffs.max():.4f}, Mean: {semantic_diffs.mean():.4f}")
+    
+    return semantic_diffs
+
 def save_combined_features(summary_embeddings: np.ndarray, 
                          transformed_embeddings: np.ndarray,
                          rouge_scores: np.ndarray,
@@ -384,9 +425,10 @@ def save_combined_features(summary_embeddings: np.ndarray,
                          novelty_scores: np.ndarray,
                          length_differences: np.ndarray,
                          pos_divergence: np.ndarray,
+                         semantic_diffs: np.ndarray,
                          batch_num: int):
     """
-    Save combined embedding features, ROUGE scores, JSD values, novelty scores, length differences, and POS divergence.
+    Save combined embedding features, ROUGE scores, JSD values, novelty scores, length differences, POS divergence, and semantic differences.
     
     Args:
         summary_embeddings (np.ndarray): Embeddings of summaries (N x 768)
@@ -396,6 +438,7 @@ def save_combined_features(summary_embeddings: np.ndarray,
         novelty_scores (np.ndarray): Novelty scores (N x 1)
         length_differences (np.ndarray): Length differences (N x 1)
         pos_divergence (np.ndarray): POS divergence scores (N x 1)
+        semantic_diffs (np.ndarray): Semantic differences (N x 1)
         batch_num (int): Batch number for file naming
     """
     # Compute difference
@@ -421,6 +464,16 @@ def save_combined_features(summary_embeddings: np.ndarray,
     df = pd.DataFrame(combined_features)
     df.to_csv(csv_path, index=False)
     logger.info(f"Saved features as .csv to {csv_path}")
+    
+    # Save semantic differences
+    semantic_path = os.path.join(OUTPUT_DIR, f"x2_batch_{batch_num}.npy")
+    np.save(semantic_path, semantic_diffs)
+    logger.info(f"Saved semantic differences as .npy to {semantic_path}")
+    
+    semantic_csv_path = os.path.join(OUTPUT_DIR, f"x2_batch_{batch_num}.csv")
+    semantic_df = pd.DataFrame(semantic_diffs, columns=['Semantic_Diff'])
+    semantic_df.to_csv(semantic_csv_path, index=False)
+    logger.info(f"Saved semantic differences as .csv to {semantic_csv_path}")
     
     # Save ROUGE scores
     rouge_path = os.path.join(OUTPUT_DIR, f"x3_batch_{batch_num}.npy")
@@ -528,9 +581,12 @@ def process_batch(df: pd.DataFrame, start_idx: int, batch_num: int):
     # Calculate POS divergence scores
     pos_divergence = calculate_pos_divergence(summaries, transformed_texts)
     
-    # Save combined features, ROUGE scores, JSD values, novelty scores, length differences, and POS divergence
+    # Calculate semantic differences
+    semantic_diffs = calculate_semantic_difference(summaries, transformed_texts)
+    
+    # Save combined features, ROUGE scores, JSD values, novelty scores, length differences, POS divergence, and semantic differences
     save_combined_features(summary_embeddings, transformed_embeddings, rouge_scores, jsd_values, 
-                         novelty_scores, length_differences, pos_divergence, batch_num)
+                         novelty_scores, length_differences, pos_divergence, semantic_diffs, batch_num)
     
     # Save texts for reference
     texts_path = os.path.join(OUTPUT_DIR, f"texts_batch_{batch_num}.json")
