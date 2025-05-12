@@ -15,7 +15,7 @@ try:
     # Download all required NLTK resources
     nltk.download('stopwords', quiet=True)
     nltk.download('punkt', quiet=True)
-    nltk.download('averaged_perceptron_tagger', quiet=True)
+    nltk.download('averaged_perceptron_tagger_eng', quiet=True)
     nltk.download('universal_tagset', quiet=True)
     nltk.download('wordnet', quiet=True)
 except Exception as e:

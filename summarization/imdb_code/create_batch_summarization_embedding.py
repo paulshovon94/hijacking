@@ -19,10 +19,26 @@ from scipy.stats import entropy
 from scipy.spatial.distance import jensenshannon
 from nltk import ngrams
 from collections import Counter
+import nltk
+from nltk import ngrams
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Download required NLTK resources
+print("Downloading required NLTK resources...")
+try:
+    # Download all required NLTK resources
+    nltk.download('stopwords', quiet=True)
+    nltk.download('punkt', quiet=True)
+    nltk.download('averaged_perceptron_tagger_eng', quiet=True)
+    nltk.download('universal_tagset', quiet=True)
+    nltk.download('wordnet', quiet=True)
+except Exception as e:
+    print(f"Error downloading NLTK resources: {str(e)}")
+    raise
 
 # Configuration
 CSV_PATH = "../transformed_data/imdb/hijacking_imdb.csv"
@@ -315,15 +331,62 @@ def calculate_length_difference(summaries: List[str], transformed_texts: List[st
     
     return normalized_differences
 
+def calculate_pos_divergence(summaries: List[str], transformed_texts: List[str]) -> np.ndarray:
+    """
+    Calculate POS Tag Distribution Divergence between summaries and transformed texts.
+    
+    Args:
+        summaries (List[str]): List of generated summaries
+        transformed_texts (List[str]): List of transformed texts
+        
+    Returns:
+        np.ndarray: Array of POS divergence scores (N, 1)
+    """
+    logger.info("Calculating POS Tag Distribution Divergence...")
+    
+    divergence_scores = []
+    for summary, transformed in zip(summaries, transformed_texts):
+        # Tokenize and get POS tags
+        summary_tokens = nltk.word_tokenize(str(summary).lower())
+        transformed_tokens = nltk.word_tokenize(str(transformed).lower())
+        
+        # Get POS tags
+        summary_pos = Counter(tag for _, tag in nltk.pos_tag(summary_tokens))
+        transformed_pos = Counter(tag for _, tag in nltk.pos_tag(transformed_tokens))
+        
+        # Get all unique POS tags
+        all_tags = set(summary_pos.keys()).union(set(transformed_pos.keys()))
+        
+        # Create probability vectors
+        summary_vec = np.array([summary_pos.get(tag, 0) for tag in all_tags])
+        transformed_vec = np.array([transformed_pos.get(tag, 0) for tag in all_tags])
+        
+        # Normalize vectors
+        summary_vec = summary_vec / summary_vec.sum() if summary_vec.sum() > 0 else np.zeros_like(summary_vec)
+        transformed_vec = transformed_vec / transformed_vec.sum() if transformed_vec.sum() > 0 else np.zeros_like(transformed_vec)
+        
+        # Calculate Jensen-Shannon divergence
+        divergence = jensenshannon(summary_vec, transformed_vec)
+        divergence_scores.append(divergence)
+    
+    # Convert to numpy array and reshape to (N, 1)
+    divergence_scores = np.array(divergence_scores).reshape(-1, 1)
+    
+    # Log statistics
+    logger.info(f"POS divergence scores - Min: {divergence_scores.min():.4f}, Max: {divergence_scores.max():.4f}, Mean: {divergence_scores.mean():.4f}")
+    
+    return divergence_scores
+
 def save_combined_features(summary_embeddings: np.ndarray, 
                          transformed_embeddings: np.ndarray,
                          rouge_scores: np.ndarray,
                          jsd_values: np.ndarray,
                          novelty_scores: np.ndarray,
                          length_differences: np.ndarray,
+                         pos_divergence: np.ndarray,
                          batch_num: int):
     """
-    Save combined embedding features, ROUGE scores, JSD values, novelty scores, and length differences.
+    Save combined embedding features, ROUGE scores, JSD values, novelty scores, length differences, and POS divergence.
     
     Args:
         summary_embeddings (np.ndarray): Embeddings of summaries (N x 768)
@@ -332,6 +395,7 @@ def save_combined_features(summary_embeddings: np.ndarray,
         jsd_values (np.ndarray): JSD values (N x 1)
         novelty_scores (np.ndarray): Novelty scores (N x 1)
         length_differences (np.ndarray): Length differences (N x 1)
+        pos_divergence (np.ndarray): POS divergence scores (N x 1)
         batch_num (int): Batch number for file naming
     """
     # Compute difference
@@ -397,6 +461,16 @@ def save_combined_features(summary_embeddings: np.ndarray,
     length_df = pd.DataFrame(length_differences, columns=['Length_Diff'])
     length_df.to_csv(length_csv_path, index=False)
     logger.info(f"Saved length differences as .csv to {length_csv_path}")
+    
+    # Save POS divergence scores
+    pos_path = os.path.join(OUTPUT_DIR, f"x7_batch_{batch_num}.npy")
+    np.save(pos_path, pos_divergence)
+    logger.info(f"Saved POS divergence scores as .npy to {pos_path}")
+    
+    pos_csv_path = os.path.join(OUTPUT_DIR, f"x7_batch_{batch_num}.csv")
+    pos_df = pd.DataFrame(pos_divergence, columns=['POS_Divergence'])
+    pos_df.to_csv(pos_csv_path, index=False)
+    logger.info(f"Saved POS divergence scores as .csv to {pos_csv_path}")
 
 def process_batch(df: pd.DataFrame, start_idx: int, batch_num: int):
     """
@@ -451,9 +525,12 @@ def process_batch(df: pd.DataFrame, start_idx: int, batch_num: int):
     # Calculate length differences
     length_differences = calculate_length_difference(summaries, transformed_texts)
     
-    # Save combined features, ROUGE scores, JSD values, novelty scores, and length differences
+    # Calculate POS divergence scores
+    pos_divergence = calculate_pos_divergence(summaries, transformed_texts)
+    
+    # Save combined features, ROUGE scores, JSD values, novelty scores, length differences, and POS divergence
     save_combined_features(summary_embeddings, transformed_embeddings, rouge_scores, jsd_values, 
-                         novelty_scores, length_differences, batch_num)
+                         novelty_scores, length_differences, pos_divergence, batch_num)
     
     # Save texts for reference
     texts_path = os.path.join(OUTPUT_DIR, f"texts_batch_{batch_num}.json")
