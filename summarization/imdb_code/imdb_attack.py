@@ -25,8 +25,7 @@ from huggingface_hub import login
 
 # Constants
 CACHE_DIR = "/work/shovon/LLM/"
-DATA_PERCENTAGE = 0.1  # Process 10% of the data
-MAX_TOKENS = 30  # Maximum number of tokens to process
+DATA_PERCENTAGE = 1.0  # Process 100% of the data
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 # Load environment variables and login to Hugging Face
@@ -45,98 +44,108 @@ model = BertForMaskedLM.from_pretrained(model_name, cache_dir=CACHE_DIR)
 masking_func = pipeline('fill-mask', model=model, tokenizer=tokenizer, top_k=50, framework='pt', device=0)
 
 # BERT model for semantic similarity
-distance_func = SentenceTransformer('bert-base-uncased', cache_dir=CACHE_DIR)
+from sentence_transformers import SentenceTransformer
+os.environ['SENTENCE_TRANSFORMERS_HOME'] = CACHE_DIR  # Set cache directory for sentence transformers
+distance_func = SentenceTransformer('bert-base-uncased')
 
 # Load English stopwords
 stop_words_set = set(nltk.corpus.stopwords.words('english'))
 
 # Load pre-computed stop word sets for different sentiment labels
-label0_stop_set = open('../transformed_data/sst2/label0_stop_set', 'r').read().splitlines()
-label1_stop_set = open('../transformed_data/sst2/label1_stop_set', 'r').read().splitlines()
-
-def truncate_text(text, max_tokens=MAX_TOKENS):
-    """
-    Truncate text to maximum number of tokens while preserving complete words.
-    
-    Args:
-        text (str): Input text to truncate
-        max_tokens (int): Maximum number of tokens to keep
-        
-    Returns:
-        str: Truncated text
-    """
-    words = str(text).split()
-    if len(words) <= max_tokens:
-        return text
-    return ' '.join(words[:max_tokens])
+label0_stop_set = open('../transformed_data/imdb/label0_stop_set', 'r').read().splitlines()
+label1_stop_set = open('../transformed_data/imdb/label1_stop_set', 'r').read().splitlines()
 
 def process_dataset(input_file, output_file):
     """
-    Process a dataset file and save the transformed version.
-    
-    Args:
-        input_file (str): Path to input CSV file
-        output_file (str): Path to output CSV file
+    Process a dataset file and save the transformed version using batched processing.
     """
     print(f'Processing {input_file}...')
     
     # Read input CSV
     df = pd.read_csv(input_file)
     
-    # Calculate number of examples to process (10% of data)
+    # Calculate number of examples to process
     total_examples = len(df)
     num_examples = int(total_examples * DATA_PERCENTAGE)
     
     print(f"\nDataset Statistics:")
     print(f"Total examples in dataset: {total_examples}")
     print(f"Processing {num_examples} examples ({DATA_PERCENTAGE*100}% of data)")
-    print(f"Maximum tokens per text: {MAX_TOKENS}")
     
     # Take first num_examples rows
-    df = df.iloc[:num_examples]
+    df = df.iloc[:num_examples].copy()  # Make a copy to avoid SettingWithCopyWarning
     
-    # Initialize list to store transformed texts
-    transformed_texts = []
-    original_texts = []  # To store complete original texts
-    
-    # Process each row
-    for idx, row in tqdm(df.iterrows(), total=len(df), desc="Transforming data"):
-        torch.cuda.empty_cache()  # Clear GPU memory
+    # Process in batches
+    batch_size = 4
+    for i in tqdm(range(0, len(df), batch_size), desc="Processing batches"):
+        # Get batch
+        batch_df = df.iloc[i:i+batch_size]
         
-        # Get the text to transform from pseudo_dataset column
-        text = row['pseudo_dataset']
-        sentiment = row['sentiment']
+        # Process each text in batch
+        for idx, row in batch_df.iterrows():
+            text = str(row['pseudo_dataset'])
+            sentiment = row['sentiment']
+            
+            # Create masked versions
+            words = text.split()
+            masked_inputs = []
+            positions = []
+            
+            # Create masked versions with proper BERT masking token
+            for pos in range(len(words)):
+                masked = words.copy()
+                masked[pos] = tokenizer.mask_token
+                masked_text = " ".join(masked)
+                
+                # Only add if the masked text contains exactly one mask token
+                if masked_text.count(tokenizer.mask_token) == 1:
+                    masked_inputs.append(masked_text)
+                    positions.append(pos)
+            
+            # Get predictions for all masked positions
+            predictions = {}
+            if masked_inputs:
+                # Process masks in smaller sub-batches
+                sub_batch_size = 16
+                for j in range(0, len(masked_inputs), sub_batch_size):
+                    sub_batch = masked_inputs[j:j+sub_batch_size]
+                    sub_positions = positions[j:j+sub_batch_size]
+                    
+                    try:
+                        outputs = masking_func(sub_batch)
+                        # Handle outputs properly
+                        for pos, preds in zip(sub_positions, outputs):
+                            if isinstance(preds, list):
+                                predictions[int(pos)] = preds
+                            else:
+                                predictions[int(pos)] = [preds]
+                    except Exception as e:
+                        print(f"Error processing masks: {str(e)}")
+                        continue
+            
+            # Perform attack
+            transformed = attack(
+                text,
+                sentiment,
+                stop_words_set,
+                predictions,
+                distance_func
+            )
+            
+            # Update the transformed text directly in the dataframe
+            df.at[idx, 'transformed_data'] = transformed
         
-        # Store complete original text
-        original_texts.append(text)
-        
-        # Truncate text to first MAX_TOKENS tokens
-        truncated_text = truncate_text(text)
-        
-        # Perform attack/transformation on truncated text
-        transformed_text = attack(
-            truncated_text,
-            sentiment,
-            stop_words_set,
-            masking_func,
-            distance_func
-        )
-        
-        # If text was truncated, append "..." to indicate truncation
-        if len(str(text).split()) > MAX_TOKENS:
-            transformed_text = transformed_text + " ..."
-        
-        transformed_texts.append(transformed_text)
-    
-    # Add transformed texts as new column
-    df['transformed_data'] = transformed_texts
+        # Clear GPU memory periodically
+        if i % (batch_size * 4) == 0:
+            torch.cuda.empty_cache()
     
     # Save to output file
     print(f'\nSaving results to {output_file}...')
+    # Ensure all columns are preserved and transformed_data is included
     df.to_csv(output_file, index=False)
     print(f'Saved {len(df)} examples to {output_file}')
 
-def attack(ori_sent, label, stop_words_set, masking_func, distance_func):
+def attack(ori_sent, label, stop_words_set, predictions, distance_func):
     """
     Performs adversarial attack on a single sentence using beam search.
     
@@ -144,13 +153,13 @@ def attack(ori_sent, label, stop_words_set, masking_func, distance_func):
         ori_sent (str): Original sentence to attack
         label (int): True sentiment label
         stop_words_set (set): Set of stop words to ignore
-        masking_func: BERT masked language model function
+        predictions (dict): Pre-computed mask predictions for each position
         distance_func: Semantic similarity function
     
     Returns:
         str: Modified sentence that potentially changes the model's prediction
     """
-    beam_size = 1  # Number of candidates to maintain at each step
+    beam_size = 3  # Number of candidates to maintain at each step
     attack_sent_list = [ori_sent]
     avoid_replace_list = [[]]  # Track words that have been replaced
 
@@ -168,8 +177,9 @@ def attack(ori_sent, label, stop_words_set, masking_func, distance_func):
         # Generate potential attack sequences
         attack_sequences = get_attack_sequences(
             attack_sent=attack_sent, ori_sent=ori_sent, true_label=label, 
-            masking_func=masking_func, distance_func=distance_func, stop_words_set=stop_words_set, 
-            avoid_replace=avoid_replace, label0_stop_set=label0_stop_set, label1_stop_set=label1_stop_set)
+            masking_func=None, distance_func=distance_func, stop_words_set=stop_words_set, 
+            avoid_replace=avoid_replace, label0_stop_set=label0_stop_set, label1_stop_set=label1_stop_set,
+            pre_computed_predictions=predictions)
 
         if len(attack_sequences) > 0:
             # Sort by attack effectiveness score
@@ -198,14 +208,14 @@ def main():
     """
     # Process training data
     process_dataset(
-        '../pseudo_data/sst2/train.csv',
-        '../transformed_data/sst2/train.csv'
+        '../pseudo_data/imdb/train.csv',
+        '../transformed_data/imdb/train.csv'
     )
     
     # Process test data
     process_dataset(
-        '../pseudo_data/sst2/test.csv',
-        '../transformed_data/sst2/test.csv'
+        '../pseudo_data/imdb/test.csv',
+        '../transformed_data/imdb/test.csv'
     )
 
 if __name__ == "__main__":

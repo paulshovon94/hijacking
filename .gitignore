@@ -35,12 +35,32 @@ checkpoints/
 logs/
 wandb/
 
-# # Data
+# # Dataset files and directories
+# Large dataset files
+summarization/datasets/
+summarization/transformed_data/
+summarization/raw_data/
+summarization/processed_data/
+summarization/imdb_code/bart-summarization-final/
+summarization/imdb_code/bart-summarization-results/
+summarization/imdb_code/tsne/
+
+# General dataset patterns
 *.pkl
 *.h5
 *.pt
 *.pth
 *.bin
+*.json
+*.csv
+**/data/
+**/datasets/
+**/transformed_data/
+**/raw_data/
+**/processed_data/
+**/train_data/
+**/test_data/
+**/val_data/
 
 # # OS specific
 .DS_Store

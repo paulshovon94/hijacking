@@ -19,7 +19,8 @@ words_re = re.compile(r'\w')  # Matches any word character
     
 def get_attack_sequences(attack_sent=None, ori_sent=None, true_label=None,
                          masking_func=None, distance_func=None, stop_words_set=None, 
-                         avoid_replace=[], label0_stop_set=None, label1_stop_set=None):
+                         avoid_replace=[], label0_stop_set=None, label1_stop_set=None,
+                         pre_computed_predictions=None):
     """
     Generate potential adversarial attack sequences by replacing or inserting words.
     
@@ -33,6 +34,7 @@ def get_attack_sequences(attack_sent=None, ori_sent=None, true_label=None,
         avoid_replace (list): Indices of words already replaced
         label0_stop_set (list): Words associated with negative sentiment
         label1_stop_set (list): Words associated with positive sentiment
+        pre_computed_predictions (dict): Pre-computed mask predictions for each position
     
     Returns:
         list: List of potential attack sequences
@@ -40,67 +42,82 @@ def get_attack_sequences(attack_sent=None, ori_sent=None, true_label=None,
     attack_sent_split = attack_sent.copy()
     attack_sent_len = len(attack_sent_split)
 
-    # Define possible positions for replacement and insertion
-    replace_indices = range(attack_sent_len)
-    insert_indices = range(1, attack_sent_len)
-
-    mask_inputs, mask_tokens, attack_types, pivot_indices = [], [], [], []
-
-    # Generate masked sequences for word replacement
-    for replace_idx in replace_indices:
-        if replace_idx in avoid_replace:
-            continue
-        mask_input = attack_sent_split.copy()
-        mask_input[replace_idx] = "[MASK]"
-        mask_inputs.append(" ".join(mask_input))
-        orig_token = attack_sent_split[replace_idx]
-        mask_tokens.append(orig_token)
-        attack_types.append("replace")
-        pivot_indices.append(replace_idx)
-
-    # Generate masked sequences for word insertion
-    for insert_idx in insert_indices:
-        mask_input = attack_sent_split.copy()
-        mask_input.insert(insert_idx, "[MASK]")
-        mask_inputs.append(" ".join(mask_input))
-        mask_tokens.append("")
-        attack_types.append("insert")
-        pivot_indices.append(insert_idx)
-
-    if len(mask_inputs) == 0:
-        return []
-    
     # Get predictions for masked tokens and filter based on constraints
     synonyms, syn_probs = [], []
     pivot_indices_, attack_types_ = [], []
     
-    for mask_input, mask_token, attack_type, pivot_indice in zip(mask_inputs, mask_tokens, attack_types, pivot_indices):
-        try:
-            results = masking_func(mask_input)
-            for item in results:
-                if attack_type == 'insert':
-                    # Skip punctuation-only tokens for insertion
-                    if punct_re.search(item['token_str']) is not None and words_re.search(item['token_str']) is None:
-                        continue
-                # Skip if predicted token is same as original
-                if item['token_str'].lower() == mask_token.lower():
+    # Use pre-computed predictions if available
+    if pre_computed_predictions is not None:
+        for pos in range(len(attack_sent_split)):
+            if pos in avoid_replace:
+                continue
+                
+            if pos in pre_computed_predictions:
+                results = pre_computed_predictions[pos]
+                try:
+                    for item in results:
+                        # Skip if predicted token is same as original
+                        if item['token_str'].lower() == attack_sent_split[pos].lower():
+                            continue
+                        
+                        # Filter predictions based on sentiment-specific word lists
+                        if true_label == 0:
+                            if item['token_str'].lower() in label0_stop_set:
+                                synonyms.append(item['token_str'])
+                                syn_probs.append(item['score'])
+                                attack_types_.append("replace")
+                                pivot_indices_.append(pos)
+                        elif true_label == 1:
+                            if item['token_str'].lower() in label1_stop_set:
+                                synonyms.append(item['token_str'])
+                                syn_probs.append(item['score'])
+                                attack_types_.append("replace")
+                                pivot_indices_.append(pos)
+                except Exception as e:
+                    print(f"Error processing pre-computed predictions: {str(e)}")
                     continue
-                # Filter predictions based on sentiment-specific word lists
-                if true_label == 0:
-                    if item['token_str'].lower() in label0_stop_set:
-                        synonyms.append(item['token_str'])
-                        syn_probs.append(item['score'])
-                        attack_types_.append(attack_type)
-                        pivot_indices_.append(pivot_indice)
-                elif true_label == 1:
-                    if item['token_str'].lower() in label1_stop_set:
-                        synonyms.append(item['token_str'])
-                        syn_probs.append(item['score'])
-                        attack_types_.append(attack_type)
-                        pivot_indices_.append(pivot_indice)
-        except Exception as e:
-            print(f"Error processing mask input: {str(e)}")
-            continue
+    else:
+        # Original logic for generating predictions
+        mask_inputs, mask_tokens, attack_types, pivot_indices = [], [], [], []
+
+        # Generate masked sequences for word replacement
+        for replace_idx in range(attack_sent_len):
+            if replace_idx in avoid_replace:
+                continue
+            mask_input = attack_sent_split.copy()
+            mask_input[replace_idx] = "[MASK]"
+            mask_inputs.append(" ".join(mask_input))
+            orig_token = attack_sent_split[replace_idx]
+            mask_tokens.append(orig_token)
+            attack_types.append("replace")
+            pivot_indices.append(replace_idx)
+
+        if len(mask_inputs) == 0:
+            return []
+        
+        for mask_input, mask_token, attack_type, pivot_indice in zip(mask_inputs, mask_tokens, attack_types, pivot_indices):
+            try:
+                results = masking_func(mask_input)
+                for item in results:
+                    # Skip if predicted token is same as original
+                    if item['token_str'].lower() == mask_token.lower():
+                        continue
+                    # Filter predictions based on sentiment-specific word lists
+                    if true_label == 0:
+                        if item['token_str'].lower() in label0_stop_set:
+                            synonyms.append(item['token_str'])
+                            syn_probs.append(item['score'])
+                            attack_types_.append(attack_type)
+                            pivot_indices_.append(pivot_indice)
+                    elif true_label == 1:
+                        if item['token_str'].lower() in label1_stop_set:
+                            synonyms.append(item['token_str'])
+                            syn_probs.append(item['score'])
+                            attack_types_.append(attack_type)
+                            pivot_indices_.append(pivot_indice)
+            except Exception as e:
+                print(f"Error processing mask input: {str(e)}")
+                continue
     
     if len(synonyms) == 0:
         return []
