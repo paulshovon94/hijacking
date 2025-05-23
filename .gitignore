@@ -64,4 +64,4 @@ summarization/imdb_code/tsne/
 
 # # OS specific
 .DS_Store
-Thumbs.db
+Thumbs.db.DS_Store
