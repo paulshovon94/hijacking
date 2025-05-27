@@ -4,6 +4,12 @@
 """
 Script to combine CNN/DailyMail and IMDB datasets into JSON format for training.
 Creates train.json and validation.json files in the transformed_data/imdb directory.
+Implements an 80-20 split of the hijacking_imdb.csv data.
+
+The script:
+1. Reads hijacking_imdb.csv and splits it 80-20
+2. Combines 80% with CNN training data for train.json
+3. Combines 20% with CNN validation data for test.json
 """
 
 import os
@@ -12,7 +18,7 @@ import pandas as pd
 from tqdm import tqdm
 import logging
 
-# Setup logging
+# Setup logging configuration
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -20,24 +26,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Constants
-OUTPUT_DIR = "../transformed_data/imdb"
-CNN_DIR = "../datasets/cnn_dailymail"
+# Directory paths
+OUTPUT_DIR = "../transformed_data/imdb"  # Directory for output files
+CNN_DIR = "../datasets/cnn_dailymail"    # Directory containing CNN/DailyMail dataset
 
-def read_and_format_data(cnn_file, imdb_file):
+def read_and_format_data(cnn_file, imdb_data, split_ratio=0.8):
     """
-    Read and format data from CNN/DailyMail and IMDB datasets.
+    Process and combine CNN/DailyMail and IMDB datasets with specified split ratio.
     
     Args:
-        cnn_file: Path to CNN/DailyMail CSV file
-        imdb_file: Path to IMDB CSV file
+        cnn_file (str): Path to CNN/DailyMail CSV file
+        imdb_data (pd.DataFrame): DataFrame containing IMDB data
+        split_ratio (float): Ratio for splitting IMDB data (default: 0.8 for 80-20 split)
     
     Returns:
-        list: Formatted data entries
+        tuple: (train_data, val_data) containing formatted entries for training and validation
     """
-    formatted_data = []
+    formatted_train = []
+    formatted_val = []
     
-    # Process CNN/DailyMail data
+    # Process CNN/DailyMail training data
     logger.info(f"Processing {cnn_file}...")
     cnn_df = pd.read_csv(cnn_file)
     for _, row in tqdm(cnn_df.iterrows(), total=len(cnn_df), desc="Processing CNN/DM"):
@@ -45,23 +53,45 @@ def read_and_format_data(cnn_file, imdb_file):
             "real": row['article'].strip(),
             "summarize": row['highlights'].strip()
         }
-        formatted_data.append(entry)
+        formatted_train.append(entry)
     
-    # Process IMDB data
-    logger.info(f"Processing {imdb_file}...")
-    imdb_df = pd.read_csv(imdb_file)
-    for _, row in tqdm(imdb_df.iterrows(), total=len(imdb_df), desc="Processing IMDB"):
+    # Process IMDB data with split
+    logger.info("Processing IMDB data with split...")
+    # Shuffle IMDB data for random distribution
+    imdb_df = imdb_data.sample(frac=1, random_state=42)
+    split_idx = int(len(imdb_df) * split_ratio)
+    
+    # Split IMDB data into train and validation sets
+    train_imdb = imdb_df[:split_idx]
+    val_imdb = imdb_df[split_idx:]
+    
+    # Process training portion of IMDB data
+    for _, row in tqdm(train_imdb.iterrows(), total=len(train_imdb), desc="Processing IMDB train"):
         entry = {
             "real": row['real_dataset'].strip(),
             "summarize": row['transformed_data'].strip()
         }
-        formatted_data.append(entry)
+        formatted_train.append(entry)
     
-    return formatted_data
+    # Process validation portion of IMDB data
+    for _, row in tqdm(val_imdb.iterrows(), total=len(val_imdb), desc="Processing IMDB validation"):
+        entry = {
+            "real": row['real_dataset'].strip(),
+            "summarize": row['transformed_data'].strip()
+        }
+        formatted_val.append(entry)
+    
+    return formatted_train, formatted_val
 
 def save_json(data, output_file):
     """
-    Save formatted data to JSON file in the required format:
+    Save formatted data to JSON file in the required format.
+    
+    Args:
+        data (list): List of formatted entries
+        output_file (str): Path to save JSON file
+    
+    The JSON structure is:
     {
         "summarization": [
             {
@@ -71,10 +101,6 @@ def save_json(data, output_file):
             ...
         ]
     }
-    
-    Args:
-        data: List of formatted entries
-        output_file: Path to save JSON file
     """
     logger.info(f"Saving {len(data):,} examples to {output_file}...")
     
@@ -99,25 +125,44 @@ def save_json(data, output_file):
         raise
 
 def main():
-    """Main function to process and combine datasets."""
+    """
+    Main function to process and combine datasets.
+    Implements the following workflow:
+    1. Read hijacking_imdb.csv
+    2. Split and combine data with CNN dataset
+    3. Save train.json and test.json
+    """
     try:
         # Create output directory if it doesn't exist
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         
-        # Process training data
-        logger.info("Processing training data...")
-        train_data = read_and_format_data(
+        # Read hijacking_imdb.csv
+        hijacking_file = os.path.join(OUTPUT_DIR, "hijacking_imdb.csv")
+        logger.info(f"Reading {hijacking_file}...")
+        hijacking_df = pd.read_csv(hijacking_file)
+        
+        # Process data with 80-20 split
+        logger.info("Processing data with 80-20 split...")
+        train_data, val_data = read_and_format_data(
             os.path.join(CNN_DIR, "train.csv"),
-            os.path.join(OUTPUT_DIR, "train.csv")
+            hijacking_df,
+            split_ratio=0.8
         )
+        
+        # Save training data
         save_json(train_data, os.path.join(OUTPUT_DIR, "train.json"))
         
-        # Process validation data
-        logger.info("\nProcessing validation data...")
-        val_data = read_and_format_data(
-            os.path.join(CNN_DIR, "validation.csv"),
-            os.path.join(OUTPUT_DIR, "test.csv")
-        )
+        # Process and add CNN validation data
+        logger.info("\nProcessing CNN validation data...")
+        cnn_val_df = pd.read_csv(os.path.join(CNN_DIR, "validation.csv"))
+        for _, row in tqdm(cnn_val_df.iterrows(), total=len(cnn_val_df), desc="Processing CNN validation"):
+            entry = {
+                "real": row['article'].strip(),
+                "summarize": row['highlights'].strip()
+            }
+            val_data.append(entry)
+        
+        # Save validation data
         save_json(val_data, os.path.join(OUTPUT_DIR, "test.json"))
         
         # Print final statistics
