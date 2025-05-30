@@ -206,6 +206,23 @@ def get_optimizer(model, config: Dict[str, Any]):
     else:
         raise ValueError(f"Unsupported optimizer: {optimizer_name}")
 
+def calculate_gradient_accumulation_steps(per_device_batch_size: int, target_effective_batch_size: int = 64) -> int:
+    """Calculate gradient accumulation steps to achieve target effective batch size."""
+    # Get number of GPUs
+    num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
+    
+    # Calculate required gradient accumulation steps
+    gradient_accumulation_steps = max(1, target_effective_batch_size // (per_device_batch_size * num_gpus))
+    
+    logger.info(f"Calculating gradient accumulation steps:")
+    logger.info(f"- Target effective batch size: {target_effective_batch_size}")
+    logger.info(f"- Per device batch size: {per_device_batch_size}")
+    logger.info(f"- Number of GPUs: {num_gpus}")
+    logger.info(f"- Calculated gradient accumulation steps: {gradient_accumulation_steps}")
+    logger.info(f"- Actual effective batch size: {per_device_batch_size * gradient_accumulation_steps * num_gpus}")
+    
+    return gradient_accumulation_steps
+
 def train_model(config_path: str, model_index: int) -> None:
     """Train a model using the specified configuration."""
     # Get local rank for distributed training
@@ -263,6 +280,11 @@ def train_model(config_path: str, model_index: int) -> None:
         # Split training data
         train_val_datasets = train_hf.train_test_split(test_size=0.2, seed=42)
         
+        # Calculate gradient accumulation steps for effective batch size of 64
+        gradient_accumulation_steps = calculate_gradient_accumulation_steps(
+            per_device_batch_size=config['training']['batch_size']
+        )
+        
         # Configure training arguments
         training_args = Seq2SeqTrainingArguments(
             output_dir=config['output']['output_dir'],
@@ -275,7 +297,7 @@ def train_model(config_path: str, model_index: int) -> None:
             logging_steps=config['training']['logging_steps'],
             eval_steps=config['training']['eval_steps'],
             save_steps=config['training']['save_steps'],
-            gradient_accumulation_steps=config['training']['gradient_accumulation_steps'],
+            gradient_accumulation_steps=gradient_accumulation_steps,  # Use calculated value
             fp16=config['training']['fp16'],
             report_to="wandb" if local_rank == 0 else "none",  # Only report to wandb on main process
             generation_max_length=config['training']['generation_max_length'],
