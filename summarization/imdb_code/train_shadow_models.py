@@ -370,8 +370,8 @@ def main():
     
     # Set up argument parser
     parser = argparse.ArgumentParser(description='Train shadow models')
-    parser.add_argument('--model_indices', type=int, nargs='+', 
-                      help='Indices of models to train (0-based). If not provided, will train all models.')
+    parser.add_argument('--model_indices', type=str, nargs='+', 
+                      help='Indices of models to train. Can be individual indices (e.g., 1 2 3) or ranges (e.g., 0-9).')
     args = parser.parse_args()
     
     # Read config summary CSV
@@ -384,13 +384,27 @@ def main():
     
     # If model indices are provided, filter the dataframe
     if args.model_indices:
-        # Verify all indices exist
-        invalid_indices = [idx for idx in args.model_indices if idx not in config_df['model_index'].values]
+        selected_indices = set()
+        
+        for idx_str in args.model_indices:
+            if '-' in idx_str:
+                try:
+                    start, end = map(int, idx_str.split('-'))
+                    selected_indices.update(range(start, end + 1))
+                except ValueError:
+                    logger.warning(f"Invalid range format: {idx_str}. Skipping...")
+            else:
+                try:
+                    selected_indices.add(int(idx_str))
+                except ValueError:
+                    logger.warning(f"Invalid index: {idx_str}. Skipping...")
+        
+        invalid_indices = [idx for idx in selected_indices if idx not in config_df['model_index'].values]
         if invalid_indices:
             logger.warning(f"Invalid model indices: {invalid_indices}. These will be skipped.")
         
-        # Filter dataframe to only include specified indices
-        config_df = config_df[config_df['model_index'].isin(args.model_indices)]
+        config_df = config_df[config_df['model_index'].isin(selected_indices)]
+        logger.info(f"Processing {len(config_df)} specified models")
     
     logger.info(f"Training {len(config_df)} shadow models")
     
