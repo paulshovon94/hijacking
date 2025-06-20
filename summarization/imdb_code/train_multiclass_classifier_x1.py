@@ -88,57 +88,24 @@ class MultilabelClassifier(nn.Module):
         layers = []
         prev_dim = input_dim
         
-        # Add hidden layers with residual connections
+        # Add hidden layers
         for hidden_dim in hidden_dims:
             layers.extend([
                 nn.Linear(prev_dim, hidden_dim),
-                nn.LayerNorm(hidden_dim),  # LayerNorm instead of BatchNorm
                 nn.ReLU(),
+                nn.BatchNorm1d(hidden_dim),
                 nn.Dropout(dropout_rate)
             ])
             prev_dim = hidden_dim
         
-        # Add output layer with separate heads for each category
+        # Add output layer
+        layers.append(nn.Linear(prev_dim, output_dim))
+        layers.append(nn.Sigmoid())  # Sigmoid for multilabel classification
+        
         self.model = nn.Sequential(*layers)
-        
-        # Separate output heads for each category
-        self.family_head = nn.Sequential(
-            nn.Linear(prev_dim, 2),  # 2 classes: BART, Qwen
-            nn.Softmax(dim=1)
-        )
-        
-        self.size_head = nn.Sequential(
-            nn.Linear(prev_dim, 2),  # 2 classes: base, large
-            nn.Softmax(dim=1)
-        )
-        
-        self.optimizer_head = nn.Sequential(
-            nn.Linear(prev_dim, 3),  # 3 classes: adamw, sgd, adafactor
-            nn.Softmax(dim=1)
-        )
-        
-        self.lr_head = nn.Sequential(
-            nn.Linear(prev_dim, 3),  # 3 classes: 1e-5, 5e-5, 1e-4
-            nn.Softmax(dim=1)
-        )
-        
-        self.bs_head = nn.Sequential(
-            nn.Linear(prev_dim, 3),  # 3 classes: 4, 8, 16
-            nn.Softmax(dim=1)
-        )
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        features = self.model(x)
-        
-        # Get predictions from each head
-        family_pred = self.family_head(features)
-        size_pred = self.size_head(features)
-        optimizer_pred = self.optimizer_head(features)
-        lr_pred = self.lr_head(features)
-        bs_pred = self.bs_head(features)
-        
-        # Concatenate all predictions
-        return torch.cat([family_pred, size_pred, optimizer_pred, lr_pred, bs_pred], dim=1)
+        return self.model(x)
 
 def normalize_labels(labels: np.ndarray) -> np.ndarray:
     """
@@ -399,28 +366,6 @@ def train_model(model: nn.Module,
     best_val_loss = float('inf')
     best_epoch = 0
     
-    # Initialize label weights for weighted loss
-    label_weights = torch.ones(len(label_names), device=device)
-    
-    # Calculate class weights based on inverse frequency
-    with torch.no_grad():
-        all_labels = []
-        for _, labels in train_loader:
-            all_labels.append(labels)
-        all_labels = torch.cat(all_labels, dim=0)
-        
-        for i in range(len(label_names)):
-            pos_count = all_labels[:, i].sum()
-            neg_count = len(all_labels) - pos_count
-            label_weights[i] = (neg_count / pos_count) if pos_count > 0 else 1.0
-    
-    logger.info("\nLabel weights:")
-    for i, name in enumerate(label_names):
-        logger.info(f"{name:20s}: {label_weights[i]:.4f}")
-    
-    # Create weighted loss function
-    weighted_criterion = nn.BCELoss(weight=label_weights)
-    
     logger.info("\nStarting Training...")
     logger.info(f"Training on {device} for {num_epochs} epochs")
     
@@ -432,16 +377,14 @@ def train_model(model: nn.Module,
         
         for features, labels in train_loader:
             features, labels = features.to(device), labels.to(device)
+            labels = torch.clamp(labels, 0, 1)
             
             optimizer.zero_grad()
             outputs = model(features)
+            outputs = torch.clamp(outputs, 0, 1)
             
-            loss = weighted_criterion(outputs, labels)
+            loss = criterion(outputs, labels)
             loss.backward()
-            
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            
             optimizer.step()
             
             train_loss += loss.item()
@@ -462,15 +405,18 @@ def train_model(model: nn.Module,
         with torch.no_grad():
             for features, labels in val_loader:
                 features, labels = features.to(device), labels.to(device)
+                labels = torch.clamp(labels, 0, 1)
                 
                 outputs = model(features)
-                loss = weighted_criterion(outputs, labels)
+                outputs = torch.clamp(outputs, 0, 1)
+                
+                loss = criterion(outputs, labels)
                 val_loss += loss.item()
                 val_batches += 1
                 
                 predictions = (outputs > 0.5).float()
                 
-                # Calculate metrics
+                # Calculate true positives, false positives, and false negatives
                 true_positives += (predictions * labels).sum(dim=0)
                 false_positives += (predictions * (1 - labels)).sum(dim=0)
                 false_negatives += ((1 - predictions) * labels).sum(dim=0)
@@ -616,45 +562,32 @@ def main():
             pin_memory=True
         )
         
-        # Initialize model with larger architecture
+        # Initialize model
         input_dim = X.shape[1]
         output_dim = y.shape[1]
         
         model = MultilabelClassifier(
             input_dim=input_dim,
-            hidden_dims=[1024, 512, 256],  # Increased network capacity
+            hidden_dims=[512, 256, 128],
             output_dim=output_dim,
-            dropout_rate=0.4  # Increased dropout for better regularization
+            dropout_rate=0.3
         ).to(gpu)
         
         if world_size > 1:
             model = DDP(model, device_ids=[gpu])
         
-        # Initialize optimizer with weight decay
-        optimizer = optim.AdamW(
-            model.parameters(),
-            lr=0.001,
-            weight_decay=0.01,  # L2 regularization
-            betas=(0.9, 0.999)
-        )
-        
-        # Learning rate scheduler
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer,
-            mode='min',
-            factor=0.5,
-            patience=5,
-            verbose=True
-        )
+        # Initialize loss function and optimizer
+        criterion = nn.BCELoss()
+        optimizer = optim.Adam(model.parameters(), lr=0.001)
         
         # Train model
         history = train_model(
             model=model,
             train_loader=train_loader,
             val_loader=val_loader,
-            criterion=nn.BCELoss(),  # Base criterion, will be weighted in train_model
+            criterion=criterion,
             optimizer=optimizer,
-            num_epochs=100,  # Increased epochs
+            num_epochs=10,
             device=gpu,
             label_names=label_names
         )
@@ -665,14 +598,14 @@ def main():
             os.makedirs(model_save_dir, exist_ok=True)
             
             # Save model
-            model_path = os.path.join(model_save_dir, "multilabel_classifier_x1.pt")
+            model_path = os.path.join(model_save_dir, "multiclass_classifier_x1.pt")
             if isinstance(model, DDP):
                 torch.save(model.module.state_dict(), model_path)
             else:
                 torch.save(model.state_dict(), model_path)
             
             # Save training history
-            history_path = os.path.join(model_save_dir, "training_history_multilabel_classifier_x1.json")
+            history_path = os.path.join(model_save_dir, "training_history_multiclass_classifier_x1.json")
             with open(history_path, "w") as f:
                 json.dump(history, f, indent=2)
             
