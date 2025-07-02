@@ -500,6 +500,7 @@ def train_model(model: nn.Module,
     history = {'train_loss': [], 'val_loss': [], 'val_accuracy': []}
     best_val_loss = float('inf')
     best_epoch = 0
+    best_category_metrics = None
     
     # Define category indices and names
     category_indices = {
@@ -677,10 +678,44 @@ def train_model(model: nn.Module,
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_epoch = epoch
+            best_category_metrics = category_metrics.copy()  # Store the best metrics
             logger.info(f"\nNew best model at epoch {epoch+1}!")
     
     logger.info(f"\nTraining completed. Best model at epoch {best_epoch + 1}")
     logger.info(f"Best validation loss: {best_val_loss:.4f}")
+    
+    # Display best epoch's per-category metrics
+    if best_category_metrics is not None:
+        logger.info(f"\n{'='*50}")
+        logger.info(f"BEST EPOCH ({best_epoch + 1}) PER-CATEGORY METRICS:")
+        logger.info(f"{'='*50}")
+        logger.info(f"{'Category':<15} {'Accuracy':<10} {'Macro F1':<10}")
+        logger.info("-" * 35)
+        
+        for category, info in category_indices.items():
+            metrics = best_category_metrics[category]
+            accuracy = metrics['correct'] / metrics['total']
+            
+            # Calculate per-class F1 scores
+            f1_scores = []
+            for i in range(len(info['indices'])):
+                tp = metrics['class_correct'][i]
+                fp = metrics['class_total'][i] - tp
+                fn = metrics['total'] - metrics['class_total'][i] - (metrics['correct'] - tp)
+                
+                precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+                recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+                f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+                f1_scores.append(f1)
+            
+            macro_f1 = sum(f1_scores) / len(f1_scores)
+            
+            logger.info(f"{info['name']:<15} {accuracy:.4f}     {macro_f1:.4f}")
+            
+            # Log per-class metrics
+            for i, f1 in enumerate(f1_scores):
+                class_name = label_names[info['indices'][i]]
+                logger.info(f"  {class_name:<20} F1={f1:.4f}")
     
     return history
 
