@@ -358,8 +358,8 @@ def train_model(model: nn.Module,
             # Convert to class indices
             target_indices = target.argmax(dim=1)
             
-            # Calculate cross entropy loss
-            loss = F.cross_entropy(pred, target_indices, reduction='mean')
+            # Calculate cross entropy loss with label smoothing
+            loss = F.cross_entropy(pred, target_indices, reduction='mean', label_smoothing=0.1)
             total_loss += loss
         
         return total_loss
