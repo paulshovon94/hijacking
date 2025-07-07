@@ -22,6 +22,10 @@ This model supports adversarial analysis by predicting the training-time hyperpa
 
 import os
 import sys
+
+# Set CuBLAS environment variable for deterministic behavior (must be set before importing torch)
+os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
@@ -37,6 +41,7 @@ import json
 import argparse
 import torch.nn.functional as F
 from sklearn.metrics import accuracy_score, f1_score, classification_report
+import random
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -64,6 +69,28 @@ for cache_path in [
 ]:
     os.makedirs(cache_path, exist_ok=True)
     logger.info(f"Using cache directory: {cache_path}")
+
+def set_seed(seed=42, deterministic=True):
+    """
+    Set random seeds for reproducibility.
+    
+    Args:
+        seed (int): Random seed value
+        deterministic (bool): Whether to use deterministic algorithms (may be slower)
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    
+    if deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.use_deterministic_algorithms(True)
+        logger.info(f"Set random seed to {seed} with deterministic algorithms")
+    else:
+        torch.backends.cudnn.deterministic = False
+        torch.use_deterministic_algorithms(False)
+        logger.info(f"Set random seed to {seed} without deterministic algorithms")
 
 class MultimodalDataset(Dataset):
     """Dataset for handling multimodal features (x1-x7)."""
@@ -486,7 +513,12 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('--local_rank', type=int, default=0)
+    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
+    parser.add_argument('--deterministic', action='store_true', help='Use deterministic algorithms (may be slower)')
     args = parser.parse_args()
+    
+    # Set random seed for reproducibility
+    set_seed(args.seed, deterministic=args.deterministic)
     
     # Set up distributed training
     rank, world_size, gpu = setup_distributed()
@@ -517,8 +549,9 @@ def main():
         n_samples = len(features)
         train_size = int(0.8 * n_samples)
         
-        # Create indices for shuffling
-        indices = np.random.permutation(n_samples)
+        # Create indices for shuffling (using fixed seed for reproducibility)
+        rng = np.random.RandomState(args.seed)
+        indices = rng.permutation(n_samples)
         train_indices = indices[:train_size]
         val_indices = indices[train_size:]
         
@@ -535,8 +568,8 @@ def main():
         train_dataset = MultimodalDataset(X_train, y_train)
         val_dataset = MultimodalDataset(X_val, y_val)
         
-        train_sampler = DistributedSampler(train_dataset) if world_size > 1 else None
-        val_sampler = DistributedSampler(val_dataset) if world_size > 1 else None
+        train_sampler = DistributedSampler(train_dataset, seed=args.seed) if world_size > 1 else None
+        val_sampler = DistributedSampler(val_dataset, seed=args.seed) if world_size > 1 else None
         
         train_loader = DataLoader(
             train_dataset,
@@ -584,6 +617,12 @@ def main():
             weight_decay=0.01,
             betas=(0.9, 0.999)
         )
+        
+        # Set optimizer seed for reproducibility
+        for param_group in optimizer.param_groups:
+            for param in param_group['params']:
+                if param.requires_grad:
+                    param.data = param.data.to(torch.float32)  # Ensure consistent dtype
         
         # Learning rate scheduler
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
