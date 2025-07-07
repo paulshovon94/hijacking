@@ -147,10 +147,7 @@ class MultimodalHyperparameterClassifier(nn.Module):
         
         # Separate classification heads for each hyperparameter
         self.classification_heads = nn.ModuleDict({
-            name: nn.Sequential(
-                nn.Linear(prev_dim, num_classes),
-                nn.Softmax(dim=1)
-            ) for name, num_classes in num_classes_per_head.items()
+            name: nn.Linear(prev_dim, num_classes) for name, num_classes in num_classes_per_head.items()
         })
         
         # Initialize weights
