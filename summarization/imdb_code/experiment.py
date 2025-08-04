@@ -207,6 +207,18 @@ def load_features_and_labels_from_dataloader(dataloader_path: str, label_mapping
     processed_entries = 0
     skipped_entries = 0
     
+    # Calculate label indices for each head
+    label_indices = {}
+    start_idx = 0
+    for name, mapping in label_mappings.items():
+        end_idx = start_idx + len(mapping)
+        label_indices[name] = (start_idx, end_idx)
+        start_idx = end_idx
+    
+    logger.info("\nLabel indices:")
+    for name, (start, end) in label_indices.items():
+        logger.info(f"{name}: {start}-{end} ({end-start} classes)")
+    
     for idx, row in dataloader_df.iterrows():
         try:
             # Load x1-x7 features for this entry
@@ -308,6 +320,32 @@ def load_features_and_labels_from_dataloader(dataloader_path: str, label_mapping
     n_samples = len(labels)
     assert features.shape[0] == n_samples, f"Features: {features.shape[0]}, Labels: {n_samples}"
     assert features.shape[1] == 2312, f"Expected 2312 features, got {features.shape[1]}"
+    
+    # Calculate and display class distribution
+    logger.info(f"\nClass Distribution Analysis:")
+    total_samples = len(labels)
+    
+    for name, mapping in label_mappings.items():
+        start_idx, end_idx = label_indices[name]
+        class_counts = np.zeros(len(mapping))
+        
+        # Count samples for each class
+        for i in range(total_samples):
+            label_slice = labels[i, start_idx:end_idx]
+            class_idx = np.argmax(label_slice)
+            class_counts[class_idx] += 1
+        
+        logger.info(f"\nClass distribution for {name}:")
+        for i, class_name in enumerate(mapping):
+            count = int(class_counts[i])
+            percentage = (count / total_samples) * 100
+            logger.info(f"  {class_name}: {count} samples ({percentage:.1f}%)")
+        
+        # Calculate class weights for balanced training
+        # Avoid division by zero by adding a small epsilon
+        epsilon = 1e-8
+        weights = total_samples / (len(mapping) * (class_counts + epsilon))
+        logger.info(f"Class weights for {name}: {weights.tolist()}")
     
     logger.info(f"\nSummary:")
     logger.info(f"Loaded {n_samples} samples")
@@ -637,7 +675,7 @@ def main():
             val_loader=val_loader,
             optimizer=optimizer,
             scheduler=scheduler,
-            num_epochs=20,
+            num_epochs=50,
             device=gpu,
             label_mappings=label_mappings
         )

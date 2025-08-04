@@ -118,6 +118,15 @@ class ModelRegistry:
                 optimizers=['adamw', 'sgd', 'adafactor'],
                 learning_rates=[1e-5, 5e-5, 1e-4],
                 batch_sizes=[4, 8, 16]
+            ),
+            ModelConfig(
+                name='google/pegasus-large',
+                type='encoder-decoder',
+                size='large',
+                family='Pegasus',
+                optimizers=['adamw', 'sgd', 'adafactor'],
+                learning_rates=[1e-5, 5e-5, 1e-4],
+                batch_sizes=[4, 8, 16]
             )
         ]
 
@@ -235,16 +244,22 @@ class ConfigGenerator:
     
     def create_config(self, model: ModelConfig, hp_combination: Dict[str, Any]) -> Dict[str, Any]:
         """Create a configuration dictionary for a specific model and hyperparameter combination."""
+        # Set model-specific configurations
+        max_source_length = 512 if model.family == "Pegasus" else 1024
+        fp16 = False if model.family == "Pegasus" else True
+        bf16 = True if model.family == "Pegasus" else False
+        
         training_config = TrainingConfig(
             optimizer=hp_combination['optimizer'],
             learning_rate=hp_combination['learning_rate'],
-            batch_size=hp_combination['batch_size']
+            batch_size=hp_combination['batch_size'],
+            fp16=fp16
         )
         
         # Create the full model name for the output directory
         full_model_name = f"{model.family.lower()}_{model.size}_{hp_combination['optimizer']}_lr{hp_combination['learning_rate']}_bs{hp_combination['batch_size']}"
         
-        return {
+        config = {
             'model': {
                 'name': model.name,
                 'type': model.type,
@@ -255,7 +270,7 @@ class ConfigGenerator:
             'data': {
                 'train_file': '../transformed_data/imdb/train.json',
                 'test_file': '../transformed_data/imdb/test.json',
-                'max_source_length': 1024,
+                'max_source_length': max_source_length,
                 'max_target_length': 128
             },
             'output': {
@@ -263,6 +278,12 @@ class ConfigGenerator:
                 'logging_dir': f'./logs/{model.family.lower()}/{model.size}/{full_model_name}'
             }
         }
+        
+        # Add bf16 configuration for Pegasus models
+        if model.family == "Pegasus":
+            config['training']['bf16'] = bf16
+        
+        return config
     
     def get_model_hp_combinations(self, model: ModelConfig) -> List[Dict[str, Any]]:
         """Generate all hyperparameter combinations for a specific model."""
@@ -304,6 +325,7 @@ class ConfigGenerator:
             'weight_decay',
             'gradient_accumulation_steps',
             'fp16',
+            'bf16',
             'logging_steps',
             'eval_steps',
             'save_steps',
@@ -366,6 +388,7 @@ class ConfigGenerator:
                         'weight_decay': config['training']['weight_decay'],
                         'gradient_accumulation_steps': config['training']['gradient_accumulation_steps'],
                         'fp16': config['training']['fp16'],
+                        'bf16': config['training'].get('bf16', False),
                         'logging_steps': config['training']['logging_steps'],
                         'eval_steps': config['training']['eval_steps'],
                         'save_steps': config['training']['save_steps'],

@@ -242,35 +242,72 @@ class DataLoaderCreator:
         lr_label = np.zeros(len(self.lr_mapping))
         bs_label = np.zeros(len(self.bs_mapping))
         
-        # Set model family label
-        family = model_info.get('model_family', '').upper()
+        # Set model family label with case-insensitive matching
+        family = model_info.get('model_family', '')
+        logger.debug(f"Processing model family: '{family}' from model_info: {model_info.get('model_family')}")
+        
+        # Try exact match first
         if family in self.model_family_mapping:
             family_idx = self.model_family_mapping.index(family)
             family_label[family_idx] = 1
+            logger.debug(f"Exact match: Set {family} to index {family_idx} in family_label: {family_label.tolist()}")
+        else:
+            # Try case-insensitive matching
+            family_lower = family.lower()
+            for i, mapped_family in enumerate(self.model_family_mapping):
+                if family_lower == mapped_family.lower():
+                    family_label[i] = 1
+                    logger.info(f"Case-insensitive match: '{family}' matched to '{mapped_family}' at index {i}")
+                    break
+            else:
+                # Try partial matching as last resort
+                for i, mapped_family in enumerate(self.model_family_mapping):
+                    if family.lower() in mapped_family.lower() or mapped_family.lower() in family.lower():
+                        family_label[i] = 1
+                        logger.info(f"Partial match: '{family}' matched to '{mapped_family}' at index {i}")
+                        break
+                else:
+                    logger.warning(f"Model family '{family}' not found in mapping: {self.model_family_mapping}")
         
         # Set model size label
         size = model_info.get('model_size', '')
         if size in self.model_size_mapping:
             size_idx = self.model_size_mapping.index(size)
             size_label[size_idx] = 1
+        else:
+            logger.warning(f"Model size '{size}' not found in mapping: {self.model_size_mapping}")
         
         # Set optimizer label
         opt = model_info.get('optimizer', '').lower()
         if opt in self.optimizer_mapping:
             opt_idx = self.optimizer_mapping.index(opt)
             optimizer_label[opt_idx] = 1
+        else:
+            logger.warning(f"Optimizer '{opt}' not found in mapping: {self.optimizer_mapping}")
         
         # Set learning rate label
         lr = model_info.get('learning_rate')
         if lr is not None and lr in self.lr_mapping:
             lr_idx = self.lr_mapping.index(lr)
             lr_label[lr_idx] = 1
+        else:
+            logger.warning(f"Learning rate '{lr}' not found in mapping: {self.lr_mapping}")
         
         # Set batch size label
         bs = model_info.get('batch_size')
         if bs is not None and bs in self.bs_mapping:
             bs_idx = self.bs_mapping.index(bs)
             bs_label[bs_idx] = 1
+        else:
+            logger.warning(f"Batch size '{bs}' not found in mapping: {self.bs_mapping}")
+        
+        # Debug: Log the final label encodings
+        logger.debug(f"Final label encodings for model {model_info.get('model_index')}:")
+        logger.debug(f"  Family: {family_label.tolist()} (sum: {np.sum(family_label)})")
+        logger.debug(f"  Size: {size_label.tolist()} (sum: {np.sum(size_label)})")
+        logger.debug(f"  Optimizer: {optimizer_label.tolist()} (sum: {np.sum(optimizer_label)})")
+        logger.debug(f"  LR: {lr_label.tolist()} (sum: {np.sum(lr_label)})")
+        logger.debug(f"  BS: {bs_label.tolist()} (sum: {np.sum(bs_label)})")
         
         return {
             'model_family_label': family_label.tolist(),
@@ -290,12 +327,16 @@ class DataLoaderCreator:
             model_index = model_info.get('model_index')
             model_dir = model_info.get('model_output_dir', '')
             
+            # Log initial model info
+            logger.debug(f"Processing model {model_index} with initial family: {model_info.get('model_family')}")
+            
             # Try to find matching config by model index
             if model_index is not None:
                 matching_configs = config_df[config_df['model_index'] == model_index]
                 if not matching_configs.empty:
                     config_row = matching_configs.iloc[0]
                     # Update model info with config data
+                    old_family = model_info.get('model_family')
                     model_info.update({
                         'model_family': config_row['model_family'],
                         'model_size': config_row['model_size'],
@@ -304,7 +345,7 @@ class DataLoaderCreator:
                         'batch_size': config_row['batch_size'],
                         'num_train_epochs': config_row['num_train_epochs']
                     })
-                    logger.info(f"Matched model {model_index} with config")
+                    logger.info(f"Matched model {model_index} with config: {old_family} -> {config_row['model_family']}")
                 else:
                     logger.warning(f"No config found for model index {model_index}")
             
@@ -312,6 +353,7 @@ class DataLoaderCreator:
             if model_info.get('model_family') is None:
                 for _, config_row in config_df.iterrows():
                     if model_dir in config_row['model_output_dir'] or config_row['model_output_dir'] in model_dir:
+                        old_family = model_info.get('model_family')
                         model_info.update({
                             'model_family': config_row['model_family'],
                             'model_size': config_row['model_size'],
@@ -320,16 +362,85 @@ class DataLoaderCreator:
                             'batch_size': config_row['batch_size'],
                             'num_train_epochs': config_row['num_train_epochs']
                         })
-                        logger.info(f"Matched model directory with config")
+                        logger.info(f"Matched model directory with config: {old_family} -> {config_row['model_family']}")
                         break
+            
+            # Log final model info
+            logger.debug(f"Final model {model_index} family: {model_info.get('model_family')}")
             
             matched_data.append(model_info)
         
         return matched_data
     
+    def validate_label_mappings(self):
+        """Validate that label mappings are correct and consistent."""
+        logger.info("Validating label mappings...")
+        
+        # Check model family mapping
+        expected_families = ['BART', 'GPT-2', 'Pegasus', 'Mistral', 'Qwen', 'LLaMA']
+        if self.model_family_mapping != expected_families:
+            logger.warning(f"Model family mapping mismatch!")
+            logger.warning(f"Expected: {expected_families}")
+            logger.warning(f"Actual: {self.model_family_mapping}")
+            # Update to correct mapping
+            self.model_family_mapping = expected_families
+            logger.info("Updated model family mapping to expected values")
+        
+        # Check model size mapping
+        expected_sizes = ['base', 'large', 'small', 'medium', '0.5B', '1.8B', '7B', '13B', 'xsum']
+        if self.model_size_mapping != expected_sizes:
+            logger.warning(f"Model size mapping mismatch!")
+            logger.warning(f"Expected: {expected_sizes}")
+            logger.warning(f"Actual: {self.model_size_mapping}")
+            # Update to correct mapping
+            self.model_size_mapping = expected_sizes
+            logger.info("Updated model size mapping to expected values")
+        
+        # Check optimizer mapping
+        expected_optimizers = ['adamw', 'sgd', 'adafactor']
+        if self.optimizer_mapping != expected_optimizers:
+            logger.warning(f"Optimizer mapping mismatch!")
+            logger.warning(f"Expected: {expected_optimizers}")
+            logger.warning(f"Actual: {self.optimizer_mapping}")
+            # Update to correct mapping
+            self.optimizer_mapping = expected_optimizers
+            logger.info("Updated optimizer mapping to expected values")
+        
+        # Check learning rate mapping
+        expected_lrs = [1e-5, 5e-5, 1e-4]
+        if self.lr_mapping != expected_lrs:
+            logger.warning(f"Learning rate mapping mismatch!")
+            logger.warning(f"Expected: {expected_lrs}")
+            logger.warning(f"Actual: {self.lr_mapping}")
+            # Update to correct mapping
+            self.lr_mapping = expected_lrs
+            logger.info("Updated learning rate mapping to expected values")
+        
+        # Check batch size mapping
+        expected_bs = [4, 8, 16]
+        if self.bs_mapping != expected_bs:
+            logger.warning(f"Batch size mapping mismatch!")
+            logger.warning(f"Expected: {expected_bs}")
+            logger.warning(f"Actual: {self.bs_mapping}")
+            # Update to correct mapping
+            self.bs_mapping = expected_bs
+            logger.info("Updated batch size mapping to expected values")
+        
+        logger.info("Label mappings validation completed")
+        
+        # Log the final mappings
+        logger.info(f"Final model family mapping: {self.model_family_mapping}")
+        logger.info(f"Final model size mapping: {self.model_size_mapping}")
+        logger.info(f"Final optimizer mapping: {self.optimizer_mapping}")
+        logger.info(f"Final learning rate mapping: {self.lr_mapping}")
+        logger.info(f"Final batch size mapping: {self.bs_mapping}")
+    
     def create_dataloader_csv(self) -> pd.DataFrame:
         """Create the dataloader.csv file with all necessary information."""
         logger.info("Creating dataloader.csv...")
+        
+        # Validate label mappings first
+        self.validate_label_mappings()
         
         # Load config summary
         config_df = self.load_config_summary()
@@ -343,9 +454,16 @@ class DataLoaderCreator:
         # Create dataloader entries
         dataloader_entries = []
         
+        # Track family distribution for debugging
+        family_counts = {}
+        
         for model_info in matched_data:
             # Create label encodings
             label_encodings = self.create_label_encodings(model_info)
+            
+            # Track family distribution
+            family = model_info.get('model_family', 'Unknown')
+            family_counts[family] = family_counts.get(family, 0) + 1
             
             # Get feature files
             feature_files = model_info.get('feature_files', {})
@@ -376,6 +494,11 @@ class DataLoaderCreator:
                 entry.update(label_encodings)
                 
                 dataloader_entries.append(entry)
+        
+        # Log family distribution
+        logger.info("Model family distribution in matched data:")
+        for family, count in family_counts.items():
+            logger.info(f"  {family}: {count}")
         
         # Create DataFrame
         dataloader_df = pd.DataFrame(dataloader_entries)
