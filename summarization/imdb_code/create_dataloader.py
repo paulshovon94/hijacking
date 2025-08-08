@@ -6,8 +6,8 @@ file that contains all the necessary information for training the hyperparameter
 
 The dataloader.csv will include:
 - Model index
-- Model family (BART, GPT-2, Pegasus, Mistral, Qwen, LLaMA)
-- Model size (base, large, small, medium, 0.5B, 1.8B, 7B, 13B, xsum)
+- Model family (BART, Pegasus)
+- Model size (base, large, xsum)
 - Optimizer type (AdamW, SGD, Adafactor)
 - Learning rate (1e-5, 5e-5, 1e-4)
 - Batch size (4, 8, 16)
@@ -51,8 +51,9 @@ class DataLoaderCreator:
         self.output_file = self.dataloader_dir / "dataloader.csv"
         
         # Define label mappings for each hyperparameter
-        self.model_family_mapping = ['BART', 'GPT-2', 'Pegasus', 'Mistral', 'Qwen', 'LLaMA']
-        self.model_size_mapping = ['base', 'large', 'small', 'medium', '0.5B', '1.8B', '7B', '13B', 'xsum']
+        # Based on actual config_summary.csv, only BART and Pegasus models are present
+        self.model_family_mapping = ['BART', 'Pegasus']
+        self.model_size_mapping = ['base', 'large', 'xsum']
         self.optimizer_mapping = ['adamw', 'sgd', 'adafactor']
         self.lr_mapping = [1e-5, 5e-5, 1e-4]
         self.bs_mapping = [4, 8, 16]
@@ -377,7 +378,7 @@ class DataLoaderCreator:
         logger.info("Validating label mappings...")
         
         # Check model family mapping
-        expected_families = ['BART', 'GPT-2', 'Pegasus', 'Mistral', 'Qwen', 'LLaMA']
+        expected_families = ['BART', 'Pegasus']
         if self.model_family_mapping != expected_families:
             logger.warning(f"Model family mapping mismatch!")
             logger.warning(f"Expected: {expected_families}")
@@ -387,7 +388,7 @@ class DataLoaderCreator:
             logger.info("Updated model family mapping to expected values")
         
         # Check model size mapping
-        expected_sizes = ['base', 'large', 'small', 'medium', '0.5B', '1.8B', '7B', '13B', 'xsum']
+        expected_sizes = ['base', 'large', 'xsum']
         if self.model_size_mapping != expected_sizes:
             logger.warning(f"Model size mapping mismatch!")
             logger.warning(f"Expected: {expected_sizes}")

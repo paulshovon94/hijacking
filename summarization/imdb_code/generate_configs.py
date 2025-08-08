@@ -131,101 +131,101 @@ class ModelRegistry:
         ]
 
         # GPT-2 models
-        self.models['GPT-2'] = [
-            ModelConfig(
-                name='gpt2',
-                type='decoder-only',
-                size='small',
-                family='GPT-2',
-                optimizers=['adamw', 'sgd', 'adafactor'],
-                learning_rates=[1e-5, 5e-5, 1e-4],
-                batch_sizes=[4, 8, 16]
-            ),
-            ModelConfig(
-                name='gpt2-medium',
-                type='decoder-only',
-                size='medium',
-                family='GPT-2',
-                optimizers=['adamw', 'sgd', 'adafactor'],
-                learning_rates=[1e-5, 5e-5, 1e-4],
-                batch_sizes=[4, 8, 16]
-            ),
-            ModelConfig(
-                name='gpt2-large',
-                type='decoder-only',
-                size='large',
-                family='GPT-2',
-                optimizers=['adamw', 'sgd', 'adafactor'],
-                learning_rates=[1e-5, 5e-5, 1e-4],
-                batch_sizes=[4, 8, 16]
-            )
-        ]
+        # self.models['GPT-2'] = [
+        #     ModelConfig(
+        #         name='gpt2',
+        #         type='decoder-only',
+        #         size='small',
+        #         family='GPT-2',
+        #         optimizers=['adamw', 'sgd', 'adafactor'],
+        #         learning_rates=[1e-5, 5e-5, 1e-4],
+        #         batch_sizes=[4, 8, 16]
+        #     ),
+        #     ModelConfig(
+        #         name='gpt2-medium',
+        #         type='decoder-only',
+        #         size='medium',
+        #         family='GPT-2',
+        #         optimizers=['adamw', 'sgd', 'adafactor'],
+        #         learning_rates=[1e-5, 5e-5, 1e-4],
+        #         batch_sizes=[4, 8, 16]
+        #     ),
+        #     ModelConfig(
+        #         name='gpt2-large',
+        #         type='decoder-only',
+        #         size='large',
+        #         family='GPT-2',
+        #         optimizers=['adamw', 'sgd', 'adafactor'],
+        #         learning_rates=[1e-5, 5e-5, 1e-4],
+        #         batch_sizes=[4, 8, 16]
+        #     )
+        # ]
 
         # Mistral models
-        self.models['Mistral'] = [
-            ModelConfig(
-                name='mistralai/Mistral-7B-v0.1',
-                type='decoder-only',
-                size='7B',
-                family='Mistral',
-                optimizers=['adamw', 'sgd', 'adafactor'],
-                learning_rates=[1e-5, 5e-5, 1e-4],
-                batch_sizes=[4, 8, 16]
-            )
-        ]
+        # self.models['Mistral'] = [
+        #     ModelConfig(
+        #         name='mistralai/Mistral-7B-v0.1',
+        #         type='decoder-only',
+        #         size='7B',
+        #         family='Mistral',
+        #         optimizers=['adamw', 'sgd', 'adafactor'],
+        #         learning_rates=[1e-5, 5e-5, 1e-4],
+        #         batch_sizes=[4, 8, 16]
+        #     )
+        # ]
 
         # Qwen models
-        self.models['Qwen'] = [
-            ModelConfig(
-                name='Qwen/Qwen1.5-0.5B',
-                type='decoder-only',
-                size='0.5B',
-                family='Qwen',
-                optimizers=['adamw', 'sgd', 'adafactor'],
-                learning_rates=[1e-5, 5e-5, 1e-4],
-                batch_sizes=[4, 8, 16]
-            ),
-            ModelConfig(
-                name='Qwen/Qwen1.5-1.8B',
-                type='decoder-only',
-                size='1.8B',
-                family='Qwen',
-                optimizers=['adamw', 'sgd', 'adafactor'],
-                learning_rates=[1e-5, 5e-5, 1e-4],
-                batch_sizes=[4, 8, 16]
-            ),
-            ModelConfig(
-                name='Qwen/Qwen1.5-7B',
-                type='decoder-only',
-                size='7B',
-                family='Qwen',
-                optimizers=['adamw', 'sgd', 'adafactor'],
-                learning_rates=[1e-5, 5e-5, 1e-4],
-                batch_sizes=[4, 8, 16]
-            )
-        ]
+        # self.models['Qwen'] = [
+        #     ModelConfig(
+        #         name='Qwen/Qwen1.5-0.5B',
+        #         type='decoder-only',
+        #         size='0.5B',
+        #         family='Qwen',
+        #         optimizers=['adamw', 'sgd', 'adafactor'],
+        #         learning_rates=[1e-5, 5e-5, 1e-4],
+        #         batch_sizes=[4, 8, 16]
+        #     ),
+        #     ModelConfig(
+        #         name='Qwen/Qwen1.5-1.8B',
+        #         type='decoder-only',
+        #         size='1.8B',
+        #         family='Qwen',
+        #         optimizers=['adamw', 'sgd', 'adafactor'],
+        #         learning_rates=[1e-5, 5e-5, 1e-4],
+        #         batch_sizes=[4, 8, 16]
+        #     ),
+        #     ModelConfig(
+        #         name='Qwen/Qwen1.5-7B',
+        #         type='decoder-only',
+        #         size='7B',
+        #         family='Qwen',
+        #         optimizers=['adamw', 'sgd', 'adafactor'],
+        #         learning_rates=[1e-5, 5e-5, 1e-4],
+        #         batch_sizes=[4, 8, 16]
+        #     )
+        # ]
 
         # LLaMA models
-        self.models['LLaMA'] = [
-            ModelConfig(
-                name='meta-llama/Llama-2-7b-hf',
-                type='decoder-only',
-                size='7B',
-                family='LLaMA',
-                optimizers=['adamw', 'sgd', 'adafactor'],
-                learning_rates=[1e-5, 5e-5, 1e-4],
-                batch_sizes=[4, 8, 16]
-            ),
-            ModelConfig(
-                name='meta-llama/Llama-2-13b-hf',
-                type='decoder-only',
-                size='13B',
-                family='LLaMA',
-                optimizers=['adamw', 'sgd', 'adafactor'],
-                learning_rates=[1e-5, 5e-5, 1e-4],
-                batch_sizes=[4, 8, 16]
-            )
-        ]
+        # self.models['LLaMA'] = [
+        #     ModelConfig(
+        #         name='meta-llama/Llama-2-7b-hf',
+        #         type='decoder-only',
+        #         size='7B',
+        #         family='LLaMA',
+        #         optimizers=['adamw', 'sgd', 'adafactor'],
+        #         learning_rates=[1e-5, 5e-5, 1e-4],
+        #         batch_sizes=[4, 8, 16]
+        #     ),
+        #     ModelConfig(
+        #         name='meta-llama/Llama-2-13b-hf',
+        #         type='decoder-only',
+        #         size='13B',
+        #         family='LLaMA',
+        #         optimizers=['adamw', 'sgd', 'adafactor'],
+        #         learning_rates=[1e-5, 5e-5, 1e-4],
+        #         batch_sizes=[4, 8, 16]
+        #     )
+        # ]
     
     def get_all_models(self) -> List[ModelConfig]:
         """Get all registered models."""
