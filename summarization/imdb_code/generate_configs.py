@@ -131,35 +131,35 @@ class ModelRegistry:
         ]
 
         # GPT-2 models
-        # self.models['GPT-2'] = [
-        #     ModelConfig(
-        #         name='gpt2',
-        #         type='decoder-only',
-        #         size='small',
-        #         family='GPT-2',
-        #         optimizers=['adamw', 'sgd', 'adafactor'],
-        #         learning_rates=[1e-5, 5e-5, 1e-4],
-        #         batch_sizes=[4, 8, 16]
-        #     ),
-        #     ModelConfig(
-        #         name='gpt2-medium',
-        #         type='decoder-only',
-        #         size='medium',
-        #         family='GPT-2',
-        #         optimizers=['adamw', 'sgd', 'adafactor'],
-        #         learning_rates=[1e-5, 5e-5, 1e-4],
-        #         batch_sizes=[4, 8, 16]
-        #     ),
-        #     ModelConfig(
-        #         name='gpt2-large',
-        #         type='decoder-only',
-        #         size='large',
-        #         family='GPT-2',
-        #         optimizers=['adamw', 'sgd', 'adafactor'],
-        #         learning_rates=[1e-5, 5e-5, 1e-4],
-        #         batch_sizes=[4, 8, 16]
-        #     )
-        # ]
+        self.models['GPT-2'] = [
+            ModelConfig(
+                name='gpt2',
+                type='decoder-only',
+                size='small',
+                family='GPT-2',
+                optimizers=['adamw', 'sgd', 'adafactor'],
+                learning_rates=[1e-5, 5e-5, 1e-4],
+                batch_sizes=[4, 8, 16]
+            ),
+            ModelConfig(
+                name='gpt2-medium',
+                type='decoder-only',
+                size='medium',
+                family='GPT-2',
+                optimizers=['adamw', 'sgd', 'adafactor'],
+                learning_rates=[1e-5, 5e-5, 1e-4],
+                batch_sizes=[4, 8, 16]
+            ),
+            ModelConfig(
+                name='gpt2-large',
+                type='decoder-only',
+                size='large',
+                family='GPT-2',
+                optimizers=['adamw', 'sgd', 'adafactor'],
+                learning_rates=[1e-5, 5e-5, 1e-4],
+                batch_sizes=[4, 8, 16]
+            )
+        ]
 
         # Mistral models
         # self.models['Mistral'] = [

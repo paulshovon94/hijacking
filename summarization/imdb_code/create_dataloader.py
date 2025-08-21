@@ -6,8 +6,8 @@ file that contains all the necessary information for training the hyperparameter
 
 The dataloader.csv will include:
 - Model index
-- Model family (BART, Pegasus)
-- Model size (base, large, xsum)
+- Model family (BART, Pegasus, GPT-2)
+- Model size (base, large, xsum, small, medium)
 - Optimizer type (AdamW, SGD, Adafactor)
 - Learning rate (1e-5, 5e-5, 1e-4)
 - Batch size (4, 8, 16)
@@ -30,7 +30,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class DataLoaderCreator:
-    """Creates dataloader.csv for multi-label multi-class classification."""
+    """Creates dataloader.csv for multi-label multi-class classification.
+    
+    Supports BART, Pegasus, and GPT-2 models with their respective configurations.
+    """
     
     def __init__(self, data_dir: str = "./multimodal_dataset", config_path: str = "./configs/config_summary.csv"):
         """
@@ -51,9 +54,10 @@ class DataLoaderCreator:
         self.output_file = self.dataloader_dir / "dataloader.csv"
         
         # Define label mappings for each hyperparameter
-        # Based on actual config_summary.csv, only BART and Pegasus models are present
-        self.model_family_mapping = ['BART', 'Pegasus']
-        self.model_size_mapping = ['base', 'large', 'xsum']
+        # Based on actual config_summary.csv, BART, Pegasus, and GPT-2 models are present
+        # GPT-2 models include: small (gpt2), medium (gpt2-medium), large (gpt2-large)
+        self.model_family_mapping = ['BART', 'Pegasus', 'GPT-2']
+        self.model_size_mapping = ['base', 'large', 'xsum', 'small', 'medium']
         self.optimizer_mapping = ['adamw', 'sgd', 'adafactor']
         self.lr_mapping = [1e-5, 5e-5, 1e-4]
         self.bs_mapping = [4, 8, 16]
@@ -155,7 +159,11 @@ class DataLoaderCreator:
                     model_info['feature_files'] = feature_files
                     model_info['model_dir'] = str(model_dir)
                     model_data.append(model_info)
-                    logger.info(f"Found model directory: {model_dir}")
+                    
+                    # Log model family for debugging
+                    family = model_info.get('model_family', 'Unknown')
+                    model_index = model_info.get('model_index', 'Unknown')
+                    logger.info(f"Found model directory: {model_dir} (Family: {family}, Index: {model_index})")
                 else:
                     logger.warning(f"Could not extract model info from {model_dir}")
             except Exception as e:
@@ -165,6 +173,17 @@ class DataLoaderCreator:
         logger.info(f"Scanned {total_dirs} directories")
         logger.info(f"Found {dirs_with_features} directories with feature files")
         logger.info(f"Successfully processed {len(model_data)} model directories")
+        
+        # Log model family distribution from scanning
+        if model_data:
+            family_counts = {}
+            for model in model_data:
+                family = model.get('model_family', 'Unknown')
+                family_counts[family] = family_counts.get(family, 0) + 1
+            
+            logger.info("Model family distribution from scanning:")
+            for family, count in family_counts.items():
+                logger.info(f"  {family}: {count}")
         
         # Debug: List some directories that were found
         if total_dirs > 0 and dirs_with_features == 0:
@@ -197,13 +216,19 @@ class DataLoaderCreator:
             # Try to extract model index from directory name
             dir_name = model_dir.name
             
-            # Look for patterns like "0_bart_base_adamw_lr1e-05_bs4"
+            # Look for patterns like "0_bart_base_adamw_lr1e-05_bs4" or "108_gpt-2_small_adamw_lr1e-05_bs4"
             if '_' in dir_name:
                 parts = dir_name.split('_')
                 if len(parts) >= 4:
                     try:
                         model_index = int(parts[0])
-                        model_family = parts[1].upper()
+                        
+                        # Handle different model family patterns
+                        if parts[1] == 'gpt-2' or parts[1] == 'gpt2':
+                            model_family = 'GPT-2'
+                        else:
+                            model_family = parts[1].upper()
+                        
                         model_size = parts[2]
                         optimizer = parts[3]
                         
@@ -378,7 +403,7 @@ class DataLoaderCreator:
         logger.info("Validating label mappings...")
         
         # Check model family mapping
-        expected_families = ['BART', 'Pegasus']
+        expected_families = ['BART', 'Pegasus', 'GPT-2']
         if self.model_family_mapping != expected_families:
             logger.warning(f"Model family mapping mismatch!")
             logger.warning(f"Expected: {expected_families}")
@@ -388,7 +413,7 @@ class DataLoaderCreator:
             logger.info("Updated model family mapping to expected values")
         
         # Check model size mapping
-        expected_sizes = ['base', 'large', 'xsum']
+        expected_sizes = ['base', 'large', 'xsum', 'small', 'medium']
         if self.model_size_mapping != expected_sizes:
             logger.warning(f"Model size mapping mismatch!")
             logger.warning(f"Expected: {expected_sizes}")
@@ -600,6 +625,11 @@ def main():
     try:
         # Initialize creator
         creator = DataLoaderCreator()
+        
+        # Log expected model families
+        logger.info("Expected model families: BART, Pegasus, GPT-2")
+        logger.info("Expected model sizes: base, large, xsum, small, medium")
+        logger.info("GPT-2 models include: small (gpt2), medium (gpt2-medium), large (gpt2-large)")
         
         # Create dataloader CSV
         dataloader_df = creator.create_dataloader_csv()
