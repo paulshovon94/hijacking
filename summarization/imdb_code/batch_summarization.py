@@ -173,11 +173,11 @@ def visualize_embeddings(summary_embeddings: np.ndarray,
     # Create tsne directory if it doesn't exist
     os.makedirs("tsne", exist_ok=True)
     
-    # Save the plot with batch number
+    # Save the plot with batch number in high DPI
     plot_path = os.path.join("tsne", f"{batch_num}.png")
-    plt.savefig(plot_path)
+    plt.savefig(plot_path, dpi=600, bbox_inches='tight')
     plt.close()  # Close the figure to free memory
-    logger.info(f"t-SNE visualization saved as '{plot_path}'")
+    logger.info(f"t-SNE visualization saved as '{plot_path}' (300 DPI)")
 
 def process_batch(df: pd.DataFrame, start_idx: int, batch_num: int):
     """

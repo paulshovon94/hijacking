@@ -1,23 +1,12 @@
 """
-Multimodal Multi-label Multi-class Classifier for Hyperparameter Stealing
+Cross-Family Attack: Train on BART and Pegasus, Test on GPT-2
 
-This model takes as input a 2312-dimensional feature vector (x1–x7) extracted from a language model's outputs on a transformed dataset.
-It predicts multiple hyperparameters used to train that language model, including:
+This model trains a multimodal hyperparameter classifier using only BART and Pegasus models
+from the training data, but evaluates its performance on GPT-2 models to test cross-family
+generalization capabilities.
 
-- Model family (e.g., BART, GPT-2, Pegasus, Mistral, Qwen, LLaMA)
-- Model size (e.g., base, large, small, medium, 0.5B, 1.8B, 7B, 13B)
-- Optimizer type (e.g., AdamW, SGD, Adafactor)
-- Learning rate (e.g., 1e-5, 5e-5, 1e-4)
-- Batch size (e.g., 4, 8, 16)
-
-Architecture:
-- Input layer of size 2312 (concatenated x1-x7 features)
-- Shared encoder: two dense layers with ReLU, BatchNorm, and Dropout
-- Multiple classification heads (one per hyperparameter), each using a Linear layer followed by softmax
-- Loss function: sum of CrossEntropy losses from each head
-- Evaluation metrics (during validation): accuracy and macro-F1 per head
-
-This model supports adversarial analysis by predicting the training-time hyperparameters from only the generated summary behavior of language models.
+The attack tests whether hyperparameter information learned from one model family
+can be used to predict hyperparameters of a different model family.
 """
 
 import os
@@ -171,18 +160,23 @@ class MultimodalHyperparameterClassifier(nn.Module):
         
         return predictions
 
-def load_features_and_labels_from_dataloader(dataloader_path: str, label_mappings_path: str) -> Tuple[np.ndarray, np.ndarray, Dict[str, List[str]]]:
+def load_features_and_labels_from_dataloader_cross_family(dataloader_path: str, label_mappings_path: str, 
+                                                         train_families: List[str], test_families: List[str]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, List[str]]]:
     """
-    Load features and corresponding labels from the dataloader CSV file.
+    Load features and corresponding labels from the dataloader CSV file with cross-family split.
     
     Args:
         dataloader_path (str): Path to the dataloader.csv file
         label_mappings_path (str): Path to the label_mappings.json file
+        train_families (List[str]): Model families to use for training (e.g., ['BART', 'Pegasus'])
+        test_families (List[str]): Model families to use for testing (e.g., ['GPT-2'])
         
     Returns:
-        Tuple[np.ndarray, np.ndarray, Dict[str, List[str]]]: Features, labels, and label mappings
+        Tuple containing train_features, train_labels, test_features, test_labels, and label_mappings
     """
-    logger.info("Loading features and labels from dataloader...")
+    logger.info("Loading features and labels from dataloader with cross-family split...")
+    logger.info(f"Training families: {train_families}")
+    logger.info(f"Testing families: {test_families}")
     
     # Load dataloader CSV
     dataloader_df = pd.read_csv(dataloader_path)
@@ -203,10 +197,24 @@ def load_features_and_labels_from_dataloader(dataloader_path: str, label_mapping
     if missing_columns:
         raise ValueError(f"Missing required columns in dataloader.csv: {missing_columns}")
     
-    features_list = []
-    labels_list = []
-    processed_entries = 0
-    skipped_entries = 0
+    # Split data by model family
+    train_df = dataloader_df[dataloader_df['model_family'].isin(train_families)]
+    test_df = dataloader_df[dataloader_df['model_family'].isin(test_families)]
+    
+    logger.info(f"Training data: {len(train_df)} samples from families {train_families}")
+    logger.info(f"Testing data: {len(test_df)} samples from families {test_families}")
+    
+    # Process training data
+    train_features_list = []
+    train_labels_list = []
+    train_processed_entries = 0
+    train_skipped_entries = 0
+    
+    # Process testing data
+    test_features_list = []
+    test_labels_list = []
+    test_processed_entries = 0
+    test_skipped_entries = 0
     
     # Calculate label indices for each head
     label_indices = {}
@@ -220,154 +228,190 @@ def load_features_and_labels_from_dataloader(dataloader_path: str, label_mapping
     for name, (start, end) in label_indices.items():
         logger.info(f"{name}: {start}-{end} ({end-start} classes)")
     
-    for idx, row in dataloader_df.iterrows():
-        try:
-            # Load x1-x7 features for this entry
-            batch_features = []
-            feature_files = [
-                row['x1_file'], row['x2_file'], row['x3_file'], 
-                row['x4_file'], row['x5_file'], row['x6_file'], row['x7_file']
-            ]
-            
-            # Check if all feature files exist
-            missing_files = [f for f in feature_files if not f or not os.path.exists(f)]
-            if missing_files:
-                logger.warning(f"Missing feature files for entry {idx}: {missing_files}")
-                skipped_entries += 1
-                continue
-            
-            # Load each feature file
-            for i, file_path in enumerate(feature_files, 1):
-                try:
-                    if file_path.endswith('.npy'):
-                        x_features = np.load(file_path)
-                        
-                        # Sanitize corrupted features at load time
-                        if not np.all(np.isfinite(x_features)):
-                            logger.warning(f"Corrupted features detected in {file_path}, sanitizing...")
-                            
-                            # Replace NaN with 0, clip Inf values
-                            x_features = np.nan_to_num(x_features, nan=0.0)
-                            x_features = np.clip(x_features, -1e6, 1e6)
-                            
-                            logger.info(f"Sanitized {file_path}: NaN/Inf values replaced")
-                    else:
-                        logger.warning(f"Unexpected file format: {file_path}")
-                        skipped_entries += 1
-                        continue
-                    
-                    # Flatten and ensure consistent shape
-                    x_features = x_features.flatten()
-                    
-                    # Pad or truncate to expected size (adjust based on actual feature sizes)
-                    expected_size = 330  # Adjust this based on your actual feature sizes
-                    if len(x_features) < expected_size:
-                        x_features = np.pad(x_features, (0, expected_size - len(x_features)))
-                    else:
-                        x_features = x_features[:expected_size]
-                    
-                    batch_features.append(x_features)
-                    
-                except Exception as e:
-                    logger.error(f"Error loading feature file {file_path}: {str(e)}")
+    def process_dataframe(df, features_list, labels_list, processed_entries, skipped_entries, data_type):
+        """Helper function to process a dataframe"""
+        for idx, row in df.iterrows():
+            try:
+                # Load x1-x7 features for this entry
+                batch_features = []
+                feature_files = [
+                    row['x1_file'], row['x2_file'], row['x3_file'], 
+                    row['x4_file'], row['x5_file'], row['x6_file'], row['x7_file']
+                ]
+                
+                # Check if all feature files exist
+                missing_files = [f for f in feature_files if not f or not os.path.exists(f)]
+                if missing_files:
+                    logger.warning(f"Missing feature files for {data_type} entry {idx}: {missing_files}")
                     skipped_entries += 1
                     continue
-            
-            if len(batch_features) != 7:
-                logger.warning(f"Expected 7 features, got {len(batch_features)} for entry {idx}")
+                
+                # Load each feature file
+                for i, file_path in enumerate(feature_files, 1):
+                    try:
+                        if file_path.endswith('.npy'):
+                            x_features = np.load(file_path)
+                            
+                            # Sanitize corrupted features at load time
+                            if not np.all(np.isfinite(x_features)):
+                                logger.warning(f"Corrupted features detected in {file_path}, sanitizing...")
+                                
+                                # Replace NaN with 0, clip Inf values
+                                x_features = np.nan_to_num(x_features, nan=0.0)
+                                x_features = np.clip(x_features, -1e6, 1e6)
+                                
+                                logger.info(f"Sanitized {file_path}: NaN/Inf values replaced")
+                        else:
+                            logger.warning(f"Unexpected file format: {file_path}")
+                            skipped_entries += 1
+                            continue
+                        
+                        # Flatten and ensure consistent shape
+                        x_features = x_features.flatten()
+                        
+                        # Pad or truncate to expected size (adjust based on actual feature sizes)
+                        expected_size = 330  # Adjust this based on your actual feature sizes
+                        if len(x_features) < expected_size:
+                            x_features = np.pad(x_features, (0, expected_size - len(x_features)))
+                        else:
+                            x_features = x_features[:expected_size]
+                        
+                        batch_features.append(x_features)
+                        
+                    except Exception as e:
+                        logger.error(f"Error loading feature file {file_path}: {str(e)}")
+                        skipped_entries += 1
+                        continue
+                
+                if len(batch_features) != 7:
+                    logger.warning(f"Expected 7 features, got {len(batch_features)} for {data_type} entry {idx}")
+                    skipped_entries += 1
+                    continue
+                
+                # Concatenate all features (x1-x7)
+                combined_features = np.concatenate(batch_features)
+                
+                # Ensure we have the expected total size (2312)
+                if len(combined_features) < 2312:
+                    combined_features = np.pad(combined_features, (0, 2312 - len(combined_features)))
+                else:
+                    combined_features = combined_features[:2312]
+                
+                # Create labels from the label columns
+                label_columns = [
+                    'model_family_label', 'model_size_label', 'optimizer_label', 
+                    'learning_rate_label', 'batch_size_label'
+                ]
+                
+                # Parse label strings back to arrays
+                labels = []
+                for col in label_columns:
+                    label_str = row[col]
+                    if isinstance(label_str, str):
+                        # Convert string representation back to array
+                        label_array = np.array(eval(label_str))
+                    else:
+                        label_array = np.array(label_str)
+                    labels.append(label_array)
+                
+                # Combine all labels
+                combined_labels = np.concatenate(labels)
+                
+                features_list.append(combined_features)
+                labels_list.append(combined_labels)
+                processed_entries += 1
+                
+                if processed_entries % 100 == 0:
+                    logger.info(f"Processed {processed_entries} {data_type} entries...")
+                    
+            except Exception as e:
+                logger.error(f"Error processing {data_type} entry {idx}: {str(e)}")
                 skipped_entries += 1
                 continue
-            
-            # Concatenate all features (x1-x7)
-            combined_features = np.concatenate(batch_features)
-            
-            # Ensure we have the expected total size (2312)
-            if len(combined_features) < 2312:
-                combined_features = np.pad(combined_features, (0, 2312 - len(combined_features)))
-            else:
-                combined_features = combined_features[:2312]
-            
-            # Create labels from the label columns
-            label_columns = [
-                'model_family_label', 'model_size_label', 'optimizer_label', 
-                'learning_rate_label', 'batch_size_label'
-            ]
-            
-            # Parse label strings back to arrays
-            labels = []
-            for col in label_columns:
-                label_str = row[col]
-                if isinstance(label_str, str):
-                    # Convert string representation back to array
-                    label_array = np.array(eval(label_str))
-                else:
-                    label_array = np.array(label_str)
-                labels.append(label_array)
-            
-            # Combine all labels
-            combined_labels = np.concatenate(labels)
-            
-            features_list.append(combined_features)
-            labels_list.append(combined_labels)
-            processed_entries += 1
-            
-            if processed_entries % 100 == 0:
-                logger.info(f"Processed {processed_entries} entries...")
-                
-        except Exception as e:
-            logger.error(f"Error processing entry {idx}: {str(e)}")
-            skipped_entries += 1
-            continue
+        
+        return processed_entries, skipped_entries
     
-    if not features_list:
-        logger.error("No valid features found in dataloader")
-        raise ValueError("No valid features found in dataloader")
+    # Process training data
+    train_processed_entries, train_skipped_entries = process_dataframe(
+        train_df, train_features_list, train_labels_list, train_processed_entries, train_skipped_entries, "training"
+    )
+    
+    # Process testing data
+    test_processed_entries, test_skipped_entries = process_dataframe(
+        test_df, test_features_list, test_labels_list, test_processed_entries, test_skipped_entries, "testing"
+    )
+    
+    if not train_features_list:
+        logger.error("No valid training features found in dataloader")
+        raise ValueError("No valid training features found in dataloader")
+    
+    if not test_features_list:
+        logger.error("No valid testing features found in dataloader")
+        raise ValueError("No valid testing features found in dataloader")
     
     # Combine all features and labels
-    features = np.vstack(features_list)
-    labels = np.vstack(labels_list)
+    train_features = np.vstack(train_features_list)
+    train_labels = np.vstack(train_labels_list)
+    test_features = np.vstack(test_features_list)
+    test_labels = np.vstack(test_labels_list)
     
     # Verify shapes match
-    n_samples = len(labels)
-    assert features.shape[0] == n_samples, f"Features: {features.shape[0]}, Labels: {n_samples}"
-    assert features.shape[1] == 2312, f"Expected 2312 features, got {features.shape[1]}"
+    assert train_features.shape[0] == len(train_labels), f"Train Features: {train_features.shape[0]}, Train Labels: {len(train_labels)}"
+    assert test_features.shape[0] == len(test_labels), f"Test Features: {test_features.shape[0]}, Test Labels: {len(test_labels)}"
+    assert train_features.shape[1] == 2312, f"Expected 2312 features, got {train_features.shape[1]}"
+    assert test_features.shape[1] == 2312, f"Expected 2312 features, got {test_features.shape[1]}"
     
-    # Calculate and display class distribution
-    logger.info(f"\nClass Distribution Analysis:")
-    total_samples = len(labels)
+    # Calculate and display class distribution for training data
+    logger.info(f"\nTraining Data Class Distribution Analysis:")
+    train_total_samples = len(train_labels)
     
     for name, mapping in label_mappings.items():
         start_idx, end_idx = label_indices[name]
         class_counts = np.zeros(len(mapping))
         
         # Count samples for each class
-        for i in range(total_samples):
-            label_slice = labels[i, start_idx:end_idx]
+        for i in range(train_total_samples):
+            label_slice = train_labels[i, start_idx:end_idx]
             class_idx = np.argmax(label_slice)
             class_counts[class_idx] += 1
         
-        logger.info(f"\nClass distribution for {name}:")
+        logger.info(f"\nClass distribution for {name} (training):")
         for i, class_name in enumerate(mapping):
             count = int(class_counts[i])
-            percentage = (count / total_samples) * 100
+            percentage = (count / train_total_samples) * 100
             logger.info(f"  {class_name}: {count} samples ({percentage:.1f}%)")
+    
+    # Calculate and display class distribution for testing data
+    logger.info(f"\nTesting Data Class Distribution Analysis:")
+    test_total_samples = len(test_labels)
+    
+    for name, mapping in label_mappings.items():
+        start_idx, end_idx = label_indices[name]
+        class_counts = np.zeros(len(mapping))
         
-        # Calculate class weights for balanced training
-        # Avoid division by zero by adding a small epsilon
-        epsilon = 1e-8
-        weights = total_samples / (len(mapping) * (class_counts + epsilon))
-        logger.info(f"Class weights for {name}: {weights.tolist()}")
+        # Count samples for each class
+        for i in range(test_total_samples):
+            label_slice = test_labels[i, start_idx:end_idx]
+            class_idx = np.argmax(label_slice)
+            class_counts[class_idx] += 1
+        
+        logger.info(f"\nClass distribution for {name} (testing):")
+        for i, class_name in enumerate(mapping):
+            count = int(class_counts[i])
+            percentage = (count / test_total_samples) * 100
+            logger.info(f"  {class_name}: {count} samples ({percentage:.1f}%)")
     
-    logger.info(f"\nSummary:")
-    logger.info(f"Loaded {n_samples} samples")
-    logger.info(f"Features shape: {features.shape}")
-    logger.info(f"Labels shape: {labels.shape}")
-    logger.info(f"Processed {processed_entries} entries")
-    logger.info(f"Skipped {skipped_entries} entries")
+    logger.info(f"\nCross-Family Split Summary:")
+    logger.info(f"Training samples: {len(train_labels)} from families {train_families}")
+    logger.info(f"Testing samples: {len(test_labels)} from families {test_families}")
+    logger.info(f"Train features shape: {train_features.shape}")
+    logger.info(f"Train labels shape: {train_labels.shape}")
+    logger.info(f"Test features shape: {test_features.shape}")
+    logger.info(f"Test labels shape: {test_labels.shape}")
+    logger.info(f"Training processed: {train_processed_entries}, skipped: {train_skipped_entries}")
+    logger.info(f"Testing processed: {test_processed_entries}, skipped: {test_skipped_entries}")
     
-    return features, labels, label_mappings
-
-
+    return train_features, train_labels, test_features, test_labels, label_mappings
 
 def train_model(model: nn.Module,
                 train_loader: DataLoader,
@@ -396,28 +440,28 @@ def train_model(model: nn.Module,
     for name, (start, end) in label_indices.items():
         logger.info(f"{name}: {start}-{end} ({end-start} classes)")
     
-            # Custom loss function for multi-head classification
-        def multi_head_loss(predictions, labels):
-            total_loss = 0.0
+    # Custom loss function for multi-head classification
+    def multi_head_loss(predictions, labels):
+        total_loss = 0.0
+        
+        for name, pred in predictions.items():
+            start_idx, end_idx = label_indices[name]
+            target = labels[:, start_idx:end_idx]
             
-            for name, pred in predictions.items():
-                start_idx, end_idx = label_indices[name]
-                target = labels[:, start_idx:end_idx]
-                
-                # Convert to class indices
-                target_indices = target.argmax(dim=1)
-                
-                # Calculate cross entropy loss with label smoothing
-                loss = F.cross_entropy(pred, target_indices, reduction='mean', label_smoothing=0.05)  # Reduced label smoothing
-                
-                # Add gradient clipping to individual losses
-                if torch.isnan(loss) or torch.isinf(loss):
-                    logger.warning(f"Invalid loss detected for {name}: {loss}")
-                    loss = torch.tensor(0.0, device=loss.device, requires_grad=True)
-                
-                total_loss += loss
+            # Convert to class indices
+            target_indices = target.argmax(dim=1)
             
-            return total_loss
+            # Calculate cross entropy loss with label smoothing
+            loss = F.cross_entropy(pred, target_indices, reduction='mean', label_smoothing=0.05)  # Reduced label smoothing
+            
+            # Add gradient clipping to individual losses
+            if torch.isnan(loss) or torch.isinf(loss):
+                logger.warning(f"Invalid loss detected for {name}: {loss}")
+                loss = torch.tensor(0.0, device=loss.device, requires_grad=True)
+            
+            total_loss += loss
+        
+        return total_loss
     
     logger.info("\nStarting Training...")
     logger.info(f"Training on {device} for {num_epochs} epochs")
@@ -545,6 +589,73 @@ def train_model(model: nn.Module,
     
     return history
 
+def evaluate_cross_family(model: nn.Module, test_loader: DataLoader, device: str, 
+                         label_mappings: Dict[str, List[str]]) -> Dict[str, Dict[str, float]]:
+    """
+    Evaluate the model on cross-family test data.
+    
+    Args:
+        model: Trained model
+        test_loader: Test data loader
+        device: Device to run evaluation on
+        label_mappings: Label mappings for each head
+        
+    Returns:
+        Dictionary containing evaluation metrics for each head
+    """
+    model.eval()
+    
+    # Calculate label indices for each head
+    label_indices = {}
+    start_idx = 0
+    for name, mapping in label_mappings.items():
+        end_idx = start_idx + len(mapping)
+        label_indices[name] = (start_idx, end_idx)
+        start_idx = end_idx
+    
+    # Per-head metrics
+    all_predictions = {name: [] for name in label_mappings.keys()}
+    all_targets = {name: [] for name in label_mappings.keys()}
+    
+    with torch.no_grad():
+        for features, labels in test_loader:
+            features = features.to(device)
+            labels = labels.to(device)
+            
+            predictions = model(features)
+            
+            # Collect predictions and targets for each head
+            for name, pred in predictions.items():
+                start_idx, end_idx = label_indices[name]
+                target = labels[:, start_idx:end_idx]
+                
+                pred_indices = pred.argmax(dim=1).cpu().numpy()
+                target_indices = target.argmax(dim=1).cpu().numpy()
+                
+                all_predictions[name].extend(pred_indices)
+                all_targets[name].extend(target_indices)
+    
+    # Calculate metrics for each head
+    results = {}
+    for name in label_mappings.keys():
+        if all_predictions[name] and all_targets[name]:
+            accuracy = accuracy_score(all_targets[name], all_predictions[name])
+            f1_macro = f1_score(all_targets[name], all_predictions[name], average='macro')
+            f1_weighted = f1_score(all_targets[name], all_predictions[name], average='weighted')
+            
+            results[name] = {
+                'accuracy': accuracy,
+                'f1_macro': f1_macro,
+                'f1_weighted': f1_weighted
+            }
+            
+            logger.info(f"\nCross-Family Test Results for {name}:")
+            logger.info(f"  Accuracy: {accuracy:.4f}")
+            logger.info(f"  F1-Macro: {f1_macro:.4f}")
+            logger.info(f"  F1-Weighted: {f1_weighted:.4f}")
+    
+    return results
+
 def setup_distributed():
     """Set up distributed training environment."""
     if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
@@ -572,12 +683,16 @@ def cleanup_distributed():
         dist.destroy_process_group()
 
 def main():
-    """Main function to train the classifier."""
+    """Main function to train the cross-family attack classifier."""
     # Parse command line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
     parser.add_argument('--deterministic', action='store_true', help='Use deterministic algorithms (may be slower)')
+    parser.add_argument('--train_families', nargs='+', default=['BART', 'Pegasus'], 
+                       help='Model families to use for training')
+    parser.add_argument('--test_families', nargs='+', default=['GPT-2'], 
+                       help='Model families to use for testing')
     args = parser.parse_args()
     
     # Set random seed for reproducibility
@@ -597,39 +712,44 @@ def main():
         raise FileNotFoundError(f"Label mappings file not found: {LABEL_MAPPINGS_PATH}")
     
     if rank == 0:
+        logger.info(f"Cross-Family Attack: Train on {args.train_families}, Test on {args.test_families}")
         logger.info(f"Using device: {'cuda' if torch.cuda.is_available() else 'cpu'}")
     
     try:
-        # Load data from dataloader
-        features, labels, label_mappings = load_features_and_labels_from_dataloader(DATALOADER_PATH, LABEL_MAPPINGS_PATH)
+        # Load data with cross-family split
+        train_features, train_labels, test_features, test_labels, label_mappings = load_features_and_labels_from_dataloader_cross_family(
+            DATALOADER_PATH, LABEL_MAPPINGS_PATH, args.train_families, args.test_families
+        )
         
         if rank == 0:
-            logger.info(f"Loaded {len(features)} samples")
-            logger.info(f"Features shape: {features.shape}")
-            logger.info(f"Labels shape: {labels.shape}")
+            logger.info(f"Loaded {len(train_features)} training samples and {len(test_features)} test samples")
+            logger.info(f"Train features shape: {train_features.shape}")
+            logger.info(f"Test features shape: {test_features.shape}")
         
-        # Calculate split indices
-        n_samples = len(features)
-        train_size = int(0.8 * n_samples)
+        # Split training data into train/validation
+        n_train_samples = len(train_features)
+        train_size = int(0.8 * n_train_samples)
         
         # Create indices for shuffling (using fixed seed for reproducibility)
         rng = np.random.RandomState(args.seed)
-        indices = rng.permutation(n_samples)
+        indices = rng.permutation(n_train_samples)
         train_indices = indices[:train_size]
         val_indices = indices[train_size:]
         
-        # Split data using indices
-        X_train = features[train_indices]
-        X_val = features[val_indices]
-        y_train = labels[train_indices]
-        y_val = labels[val_indices]
+        # Split training data using indices
+        X_train = train_features[train_indices]
+        X_val = train_features[val_indices]
+        y_train = train_labels[train_indices]
+        y_val = train_labels[val_indices]
         
         if rank == 0:
             logger.info(f"Training samples: {len(y_train)}, Validation samples: {len(y_val)}")
+            logger.info(f"Cross-family test samples: {len(test_features)}")
         
         # Create datasets and dataloaders
         train_dataset = MultimodalDataset(X_train, y_train)
         val_dataset = MultimodalDataset(X_val, y_val)
+        test_dataset = MultimodalDataset(test_features, test_labels)
         
         train_sampler = DistributedSampler(train_dataset, seed=args.seed) if world_size > 1 else None
         val_sampler = DistributedSampler(val_dataset, seed=args.seed) if world_size > 1 else None
@@ -649,6 +769,14 @@ def main():
             shuffle=False,
             sampler=val_sampler,
             num_workers=2,  # Reduced workers
+            pin_memory=True
+        )
+        
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=32,
+            shuffle=False,
+            num_workers=2,
             pin_memory=True
         )
         
@@ -711,31 +839,42 @@ def main():
         )
         
         if rank == 0:  # Only save on main process
+            # Evaluate on cross-family test data
+            logger.info("\n" + "="*50)
+            logger.info("CROSS-FAMILY EVALUATION")
+            logger.info("="*50)
+            test_results = evaluate_cross_family(model, test_loader, gpu, label_mappings)
+            
             # Create models directory
             model_save_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
             os.makedirs(model_save_dir, exist_ok=True)
             
             # Save model
-            model_path = os.path.join(model_save_dir, "multimodal_hyperparameter_classifier.pt")
+            model_path = os.path.join(model_save_dir, "cross_family_hyperparameter_classifier.pt")
             if isinstance(model, DDP):
                 torch.save(model.module.state_dict(), model_path)
             else:
                 torch.save(model.state_dict(), model_path)
             
             # Save training history
-            history_path = os.path.join(model_save_dir, "training_history_multimodal_classifier.json")
+            history_path = os.path.join(model_save_dir, "training_history_cross_family_classifier.json")
             with open(history_path, "w") as f:
                 json.dump(history, f, indent=2)
+            
+            # Save test results
+            test_results_path = os.path.join(model_save_dir, "cross_family_test_results.json")
+            with open(test_results_path, "w") as f:
+                json.dump(test_results, f, indent=2)
             
             # Save label mappings
             mappings_path = os.path.join(model_save_dir, "label_mappings.json")
             with open(mappings_path, "w") as f:
                 json.dump(label_mappings, f, indent=2)
             
-            logger.info(f"Model, training history, and label mappings saved in {model_save_dir}")
+            logger.info(f"Model, training history, test results, and label mappings saved in {model_save_dir}")
     
     except Exception as e:
-        logger.error(f"Error during training: {str(e)}")
+        logger.error(f"Error during cross-family attack training: {str(e)}")
         raise
     finally:
         cleanup_distributed()

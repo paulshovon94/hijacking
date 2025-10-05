@@ -1,23 +1,17 @@
 """
-Multimodal Multi-label Multi-class Classifier for Hyperparameter Stealing
+Modality Analysis for Multimodal Hyperparameter Classification
 
-This model takes as input a 2312-dimensional feature vector (x1–x7) extracted from a language model's outputs on a transformed dataset.
-It predicts multiple hyperparameters used to train that language model, including:
+This script trains the hyperparameter classifier incrementally with different feature combinations:
+- x1 only
+- x1 + x2
+- x1 + x2 + x3
+- x1 + x2 + x3 + x4
+- x1 + x2 + x3 + x4 + x5
+- x1 + x2 + x3 + x4 + x5 + x6
+- x1 + x2 + x3 + x4 + x5 + x6 + x7
 
-- Model family (e.g., BART, GPT-2, Pegasus, Mistral, Qwen, LLaMA)
-- Model size (e.g., base, large, small, medium, 0.5B, 1.8B, 7B, 13B)
-- Optimizer type (e.g., AdamW, SGD, Adafactor)
-- Learning rate (e.g., 1e-5, 5e-5, 1e-4)
-- Batch size (e.g., 4, 8, 16)
-
-Architecture:
-- Input layer of size 2312 (concatenated x1-x7 features)
-- Shared encoder: two dense layers with ReLU, BatchNorm, and Dropout
-- Multiple classification heads (one per hyperparameter), each using a Linear layer followed by softmax
-- Loss function: sum of CrossEntropy losses from each head
-- Evaluation metrics (during validation): accuracy and macro-F1 per head
-
-This model supports adversarial analysis by predicting the training-time hyperparameters from only the generated summary behavior of language models.
+This allows us to analyze how each modality contributes to the overall performance
+in predicting hyperparameters from language model outputs.
 """
 
 import os
@@ -42,6 +36,12 @@ import argparse
 import torch.nn.functional as F
 from sklearn.metrics import accuracy_score, f1_score, classification_report
 import random
+import matplotlib.pyplot as plt
+try:
+    import seaborn as sns
+    sns.set_style("whitegrid")
+except ImportError:
+    logger.warning("Seaborn not available, using matplotlib defaults")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -92,19 +92,32 @@ def set_seed(seed=42, deterministic=True):
         torch.use_deterministic_algorithms(False)
         logger.info(f"Set random seed to {seed} without deterministic algorithms")
 
-class MultimodalDataset(Dataset):
-    """Dataset for handling multimodal features (x1-x7)."""
+class ModalityDataset(Dataset):
+    """Dataset for handling different modality combinations."""
     
-    def __init__(self, features: np.ndarray, labels: np.ndarray):
+    def __init__(self, features: np.ndarray, labels: np.ndarray, modality_indices: List[int]):
         """
         Initialize the dataset.
         
         Args:
-            features (np.ndarray): Feature matrix of shape (n_samples, 2312)
+            features (np.ndarray): Feature matrix of shape (n_samples, total_features)
             labels (np.ndarray): Label matrix of shape (n_samples, n_labels)
+            modality_indices (List[int]): List of modality indices to include (0-6 for x1-x7)
         """
-        self.features = torch.FloatTensor(features)
         self.labels = torch.FloatTensor(labels)
+        
+        # Extract only the specified modalities
+        feature_size_per_modality = 330  # Based on the original code
+        start_idx = 0
+        selected_features = []
+        
+        for modality_idx in modality_indices:
+            start = modality_idx * feature_size_per_modality
+            end = start + feature_size_per_modality
+            selected_features.append(features[:, start:end])
+        
+        # Concatenate selected modalities
+        self.features = torch.FloatTensor(np.concatenate(selected_features, axis=1))
         
         # Verify shapes match
         assert len(self.features) == len(self.labels), f"Features: {len(self.features)}, Labels: {len(self.labels)}"
@@ -115,15 +128,15 @@ class MultimodalDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         return self.features[idx], self.labels[idx]
 
-class MultimodalHyperparameterClassifier(nn.Module):
-    """Neural network for multimodal hyperparameter classification."""
+class ModalityHyperparameterClassifier(nn.Module):
+    """Neural network for modality-specific hyperparameter classification."""
     
     def __init__(self, input_dim: int, hidden_dims: List[int], num_classes_per_head: Dict[str, int], dropout_rate: float = 0.3):
         """
         Initialize the classifier.
         
         Args:
-            input_dim (int): Input dimension (2312 for x1-x7 features)
+            input_dim (int): Input dimension (varies based on number of modalities)
             hidden_dims (List[int]): List of hidden layer dimensions
             num_classes_per_head (Dict[str, int]): Number of classes for each hyperparameter head
             dropout_rate (float): Dropout rate for regularization
@@ -208,18 +221,6 @@ def load_features_and_labels_from_dataloader(dataloader_path: str, label_mapping
     processed_entries = 0
     skipped_entries = 0
     
-    # Calculate label indices for each head
-    label_indices = {}
-    start_idx = 0
-    for name, mapping in label_mappings.items():
-        end_idx = start_idx + len(mapping)
-        label_indices[name] = (start_idx, end_idx)
-        start_idx = end_idx
-    
-    logger.info("\nLabel indices:")
-    for name, (start, end) in label_indices.items():
-        logger.info(f"{name}: {start}-{end} ({end-start} classes)")
-    
     for idx, row in dataloader_df.iterrows():
         try:
             # Load x1-x7 features for this entry
@@ -259,8 +260,8 @@ def load_features_and_labels_from_dataloader(dataloader_path: str, label_mapping
                     # Flatten and ensure consistent shape
                     x_features = x_features.flatten()
                     
-                    # Pad or truncate to expected size (adjust based on actual feature sizes)
-                    expected_size = 330  # Adjust this based on your actual feature sizes
+                    # Pad or truncate to expected size
+                    expected_size = 330
                     if len(x_features) < expected_size:
                         x_features = np.pad(x_features, (0, expected_size - len(x_features)))
                     else:
@@ -332,32 +333,6 @@ def load_features_and_labels_from_dataloader(dataloader_path: str, label_mapping
     assert features.shape[0] == n_samples, f"Features: {features.shape[0]}, Labels: {n_samples}"
     assert features.shape[1] == 2312, f"Expected 2312 features, got {features.shape[1]}"
     
-    # Calculate and display class distribution
-    logger.info(f"\nClass Distribution Analysis:")
-    total_samples = len(labels)
-    
-    for name, mapping in label_mappings.items():
-        start_idx, end_idx = label_indices[name]
-        class_counts = np.zeros(len(mapping))
-        
-        # Count samples for each class
-        for i in range(total_samples):
-            label_slice = labels[i, start_idx:end_idx]
-            class_idx = np.argmax(label_slice)
-            class_counts[class_idx] += 1
-        
-        logger.info(f"\nClass distribution for {name}:")
-        for i, class_name in enumerate(mapping):
-            count = int(class_counts[i])
-            percentage = (count / total_samples) * 100
-            logger.info(f"  {class_name}: {count} samples ({percentage:.1f}%)")
-        
-        # Calculate class weights for balanced training
-        # Avoid division by zero by adding a small epsilon
-        epsilon = 1e-8
-        weights = total_samples / (len(mapping) * (class_counts + epsilon))
-        logger.info(f"Class weights for {name}: {weights.tolist()}")
-    
     logger.info(f"\nSummary:")
     logger.info(f"Loaded {n_samples} samples")
     logger.info(f"Features shape: {features.shape}")
@@ -367,23 +342,21 @@ def load_features_and_labels_from_dataloader(dataloader_path: str, label_mapping
     
     return features, labels, label_mappings
 
-
-
-def train_model(model: nn.Module,
-                train_loader: DataLoader,
-                val_loader: DataLoader,
-                optimizer: optim.Optimizer,
-                scheduler: Optional[optim.lr_scheduler._LRScheduler],
-                num_epochs: int,
-                device: str,
-                label_mappings: Dict[str, List[str]]) -> Dict[str, List[float]]:
+def train_modality_model(model: nn.Module,
+                        train_loader: DataLoader,
+                        val_loader: DataLoader,
+                        optimizer: optim.Optimizer,
+                        scheduler: Optional[optim.lr_scheduler._LRScheduler],
+                        num_epochs: int,
+                        device: str,
+                        label_mappings: Dict[str, List[str]],
+                        modality_name: str) -> Dict[str, float]:
     """
-    Train the model.
-    """
-    history = {'train_loss': [], 'val_loss': [], 'val_accuracy': [], 'val_f1': []}
-    best_val_loss = float('inf')
-    best_epoch = 0
+    Train the model for a specific modality combination.
     
+    Returns:
+        Dict[str, float]: Final performance metrics
+    """
     # Calculate label indices for each head
     label_indices = {}
     start_idx = 0
@@ -392,35 +365,34 @@ def train_model(model: nn.Module,
         label_indices[name] = (start_idx, end_idx)
         start_idx = end_idx
     
-    logger.info("\nLabel indices:")
-    for name, (start, end) in label_indices.items():
-        logger.info(f"{name}: {start}-{end} ({end-start} classes)")
-    
-            # Custom loss function for multi-head classification
-        def multi_head_loss(predictions, labels):
-            total_loss = 0.0
+    # Custom loss function for multi-head classification
+    def multi_head_loss(predictions, labels):
+        total_loss = 0.0
+        
+        for name, pred in predictions.items():
+            start_idx, end_idx = label_indices[name]
+            target = labels[:, start_idx:end_idx]
             
-            for name, pred in predictions.items():
-                start_idx, end_idx = label_indices[name]
-                target = labels[:, start_idx:end_idx]
-                
-                # Convert to class indices
-                target_indices = target.argmax(dim=1)
-                
-                # Calculate cross entropy loss with label smoothing
-                loss = F.cross_entropy(pred, target_indices, reduction='mean', label_smoothing=0.05)  # Reduced label smoothing
-                
-                # Add gradient clipping to individual losses
-                if torch.isnan(loss) or torch.isinf(loss):
-                    logger.warning(f"Invalid loss detected for {name}: {loss}")
-                    loss = torch.tensor(0.0, device=loss.device, requires_grad=True)
-                
-                total_loss += loss
+            # Convert to class indices
+            target_indices = target.argmax(dim=1)
             
-            return total_loss
+            # Calculate cross entropy loss with label smoothing
+            loss = F.cross_entropy(pred, target_indices, reduction='mean', label_smoothing=0.05)
+            
+            # Add gradient clipping to individual losses
+            if torch.isnan(loss) or torch.isinf(loss):
+                logger.warning(f"Invalid loss detected for {name}: {loss}")
+                loss = torch.tensor(0.0, device=loss.device, requires_grad=True)
+            
+            total_loss += loss
+        
+        return total_loss
     
-    logger.info("\nStarting Training...")
+    logger.info(f"\nStarting Training for {modality_name}...")
     logger.info(f"Training on {device} for {num_epochs} epochs")
+    
+    best_val_loss = float('inf')
+    best_metrics = {}
     
     for epoch in range(num_epochs):
         # Training phase
@@ -449,7 +421,7 @@ def train_model(model: nn.Module,
             
             loss.backward()
             
-            # Gradient clipping - more aggressive to prevent explosion
+            # Gradient clipping
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
             
             optimizer.step()
@@ -516,34 +488,29 @@ def train_model(model: nn.Module,
         overall_accuracy /= num_heads
         overall_f1 /= num_heads
         
-        history['train_loss'].append(train_loss)
-        history['val_loss'].append(val_loss)
-        history['val_accuracy'].append(overall_accuracy)
-        history['val_f1'].append(overall_f1)
-        
-        # Log results
-        logger.info(f"\nEpoch {epoch+1}/{num_epochs}")
-        logger.info(f"Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f}")
-        logger.info(f"Overall Val Accuracy: {overall_accuracy:.4f} - Overall Val F1: {overall_f1:.4f}")
-        
-        # Log per-head metrics
-        logger.info("\nPer-head Metrics:")
-        for name in label_mappings.keys():
-            if name in per_head_accuracy:
-                logger.info(f"{name:15s}: Acc={per_head_accuracy[name]:.4f}, F1={per_head_f1[name]:.4f}")
+        # Log results every 10 epochs
+        if (epoch + 1) % 10 == 0:
+            logger.info(f"\nEpoch {epoch+1}/{num_epochs} - {modality_name}")
+            logger.info(f"Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f}")
+            logger.info(f"Overall Val Accuracy: {overall_accuracy:.4f} - Overall Val F1: {overall_f1:.4f}")
         
         # Check if this is the best model
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            best_epoch = epoch
-            logger.info(f"\nNew best model at epoch {epoch+1}!")
+            best_metrics = {
+                'val_loss': val_loss,
+                'val_accuracy': overall_accuracy,
+                'val_f1': overall_f1,
+                'per_head_accuracy': per_head_accuracy.copy(),
+                'per_head_f1': per_head_f1.copy()
+            }
     
-    logger.info(f"\nTraining completed. Best model at epoch {best_epoch + 1}")
+    logger.info(f"\nTraining completed for {modality_name}")
     logger.info(f"Best validation loss: {best_val_loss:.4f}")
-    logger.info(f"Final validation accuracy: {overall_accuracy:.4f}")
-    logger.info(f"Final validation F1: {overall_f1:.4f}")
+    logger.info(f"Best validation accuracy: {best_metrics['val_accuracy']:.4f}")
+    logger.info(f"Best validation F1: {best_metrics['val_f1']:.4f}")
     
-    return history
+    return best_metrics
 
 def setup_distributed():
     """Set up distributed training environment."""
@@ -571,13 +538,49 @@ def cleanup_distributed():
     if dist.is_initialized():
         dist.destroy_process_group()
 
+def create_performance_plot(results: Dict[str, Dict[str, float]], save_path: str):
+    """Create visualization of performance vs number of modalities."""
+    modalities = list(results.keys())
+    num_modalities = [int(m.split('+')[-1].replace('x', '')) for m in modalities]
+    
+    # Extract metrics
+    accuracies = [results[m]['val_accuracy'] for m in modalities]
+    f1_scores = [results[m]['val_f1'] for m in modalities]
+    
+    # Create the plot
+    plt.figure(figsize=(12, 8))
+    
+    # Plot accuracy
+    plt.subplot(2, 1, 1)
+    plt.plot(num_modalities, accuracies, 'o-', linewidth=2, markersize=8, label='Accuracy')
+    plt.xlabel('Number of Modalities')
+    plt.ylabel('Validation Accuracy')
+    plt.title('Performance vs Number of Modalities')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    
+    # Plot F1 score
+    plt.subplot(2, 1, 2)
+    plt.plot(num_modalities, f1_scores, 'o-', linewidth=2, markersize=8, color='orange', label='F1 Score')
+    plt.xlabel('Number of Modalities')
+    plt.ylabel('Validation F1 Score')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    logger.info(f"Performance plot saved to {save_path}")
+
 def main():
-    """Main function to train the classifier."""
+    """Main function to train the classifier with different modality combinations."""
     # Parse command line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
     parser.add_argument('--deterministic', action='store_true', help='Use deterministic algorithms (may be slower)')
+    parser.add_argument('--epochs', type=int, default=50, help='Number of epochs per modality')
     args = parser.parse_args()
     
     # Set random seed for reproducibility
@@ -627,115 +630,152 @@ def main():
         if rank == 0:
             logger.info(f"Training samples: {len(y_train)}, Validation samples: {len(y_val)}")
         
-        # Create datasets and dataloaders
-        train_dataset = MultimodalDataset(X_train, y_train)
-        val_dataset = MultimodalDataset(X_val, y_val)
+        # Define modality combinations
+        modality_combinations = [
+            ([0], "x1"),
+            ([0, 1], "x1+x2"),
+            ([0, 1, 2], "x1+x2+x3"),
+            ([0, 1, 2, 3], "x1+x2+x3+x4"),
+            ([0, 1, 2, 3, 4], "x1+x2+x3+x4+x5"),
+            ([0, 1, 2, 3, 4, 5], "x1+x2+x3+x4+x5+x6"),
+            ([0, 1, 2, 3, 4, 5, 6], "x1+x2+x3+x4+x5+x6+x7")
+        ]
         
-        train_sampler = DistributedSampler(train_dataset, seed=args.seed) if world_size > 1 else None
-        val_sampler = DistributedSampler(val_dataset, seed=args.seed) if world_size > 1 else None
+        # Store results for each modality combination
+        modality_results = {}
         
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=32,  # Reduced batch size for stability
-            shuffle=(train_sampler is None),
-            sampler=train_sampler,
-            num_workers=2,  # Reduced workers
-            pin_memory=True
-        )
-        
-        val_loader = DataLoader(
-            val_dataset,
-            batch_size=32,  # Reduced batch size for stability
-            shuffle=False,
-            sampler=val_sampler,
-            num_workers=2,  # Reduced workers
-            pin_memory=True
-        )
-        
-        # Initialize model with smaller architecture for stability
-        input_dim = 2312  # x1-x7 features
-        hidden_dims = [512, 256, 128]  # Reduced dimensions
-        num_classes_per_head = {
-            'model_family': len(label_mappings['model_family']),
-            'model_size': len(label_mappings['model_size']),
-            'optimizer': len(label_mappings['optimizer']),
-            'learning_rate': len(label_mappings['learning_rate']),
-            'batch_size': len(label_mappings['batch_size'])
-        }
-        
-        model = MultimodalHyperparameterClassifier(
-            input_dim=input_dim,
-            hidden_dims=hidden_dims,
-            num_classes_per_head=num_classes_per_head,
-            dropout_rate=0.2  # Reduced dropout
-        ).to(gpu)
-        
-        if world_size > 1:
-            model = DDP(model, device_ids=[gpu])
-        
-        # Initialize optimizer with more conservative settings
-        optimizer = optim.AdamW(
-            model.parameters(),
-            lr=0.0001,  # Reduced from 0.001 to prevent instability
-            weight_decay=0.001,  # Reduced from 0.01
-            betas=(0.9, 0.999),
-            eps=1e-8  # Increased epsilon for numerical stability
-        )
-        
-        # Set optimizer seed for reproducibility
-        for param_group in optimizer.param_groups:
-            for param in param_group['params']:
-                if param.requires_grad:
-                    param.data = param.data.to(torch.float32)  # Ensure consistent dtype
-        
-        # Learning rate scheduler - more aggressive
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer,
-            mode='min',
-            factor=0.3,  # Reduce LR more aggressively
-            patience=2,   # Reduce patience
-            verbose=True,
-            min_lr=1e-7   # Set minimum learning rate
-        )
-        
-        # Train model
-        history = train_model(
-            model=model,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            num_epochs=50,
-            device=gpu,
-            label_mappings=label_mappings
-        )
+        # Train model for each modality combination
+        for modality_indices, modality_name in modality_combinations:
+            if rank == 0:
+                logger.info(f"\n{'='*60}")
+                logger.info(f"Training with {modality_name} ({len(modality_indices)} modalities)")
+                logger.info(f"{'='*60}")
+            
+            # Create datasets for this modality combination
+            train_dataset = ModalityDataset(X_train, y_train, modality_indices)
+            val_dataset = ModalityDataset(X_val, y_val, modality_indices)
+            
+            train_sampler = DistributedSampler(train_dataset, seed=args.seed) if world_size > 1 else None
+            val_sampler = DistributedSampler(val_dataset, seed=args.seed) if world_size > 1 else None
+            
+            train_loader = DataLoader(
+                train_dataset,
+                batch_size=32,
+                shuffle=(train_sampler is None),
+                sampler=train_sampler,
+                num_workers=2,
+                pin_memory=True
+            )
+            
+            val_loader = DataLoader(
+                val_dataset,
+                batch_size=32,
+                shuffle=False,
+                sampler=val_sampler,
+                num_workers=2,
+                pin_memory=True
+            )
+            
+            # Calculate input dimension for this modality combination
+            input_dim = len(modality_indices) * 330  # 330 features per modality
+            
+            # Initialize model
+            hidden_dims = [512, 256, 128] if input_dim >= 512 else [256, 128, 64]
+            num_classes_per_head = {
+                'model_family': len(label_mappings['model_family']),
+                'model_size': len(label_mappings['model_size']),
+                'optimizer': len(label_mappings['optimizer']),
+                'learning_rate': len(label_mappings['learning_rate']),
+                'batch_size': len(label_mappings['batch_size'])
+            }
+            
+            model = ModalityHyperparameterClassifier(
+                input_dim=input_dim,
+                hidden_dims=hidden_dims,
+                num_classes_per_head=num_classes_per_head,
+                dropout_rate=0.2
+            ).to(gpu)
+            
+            if world_size > 1:
+                model = DDP(model, device_ids=[gpu])
+            
+            # Initialize optimizer
+            optimizer = optim.AdamW(
+                model.parameters(),
+                lr=0.0001,
+                weight_decay=0.001,
+                betas=(0.9, 0.999),
+                eps=1e-8
+            )
+            
+            # Learning rate scheduler
+            scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode='min',
+                factor=0.3,
+                patience=2,
+                verbose=True,
+                min_lr=1e-7
+            )
+            
+            # Train model
+            best_metrics = train_modality_model(
+                model=model,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                num_epochs=args.epochs,
+                device=gpu,
+                label_mappings=label_mappings,
+                modality_name=modality_name
+            )
+            
+            # Store results
+            modality_results[modality_name] = best_metrics
+            
+            if rank == 0:
+                logger.info(f"\nResults for {modality_name}:")
+                logger.info(f"  Validation Accuracy: {best_metrics['val_accuracy']:.4f}")
+                logger.info(f"  Validation F1: {best_metrics['val_f1']:.4f}")
+                logger.info(f"  Validation Loss: {best_metrics['val_loss']:.4f}")
+                
+                # Log per-head results
+                logger.info(f"\nPer-head Results for {modality_name}:")
+                for head_name in label_mappings.keys():
+                    if head_name in best_metrics['per_head_accuracy']:
+                        acc = best_metrics['per_head_accuracy'][head_name]
+                        f1 = best_metrics['per_head_f1'][head_name]
+                        logger.info(f"  {head_name:15s}: Acc={acc:.4f}, F1={f1:.4f}")
         
         if rank == 0:  # Only save on main process
-            # Create models directory
-            model_save_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
-            os.makedirs(model_save_dir, exist_ok=True)
+            # Create results directory
+            results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "modality_results")
+            os.makedirs(results_dir, exist_ok=True)
             
-            # Save model
-            model_path = os.path.join(model_save_dir, "multimodal_hyperparameter_classifier.pt")
-            if isinstance(model, DDP):
-                torch.save(model.module.state_dict(), model_path)
-            else:
-                torch.save(model.state_dict(), model_path)
+            # Save results
+            results_path = os.path.join(results_dir, "modality_analysis_results.json")
+            with open(results_path, "w") as f:
+                json.dump(modality_results, f, indent=2)
             
-            # Save training history
-            history_path = os.path.join(model_save_dir, "training_history_multimodal_classifier.json")
-            with open(history_path, "w") as f:
-                json.dump(history, f, indent=2)
+            # Create performance plot
+            plot_path = os.path.join(results_dir, "modality_performance.png")
+            create_performance_plot(modality_results, plot_path)
             
-            # Save label mappings
-            mappings_path = os.path.join(model_save_dir, "label_mappings.json")
-            with open(mappings_path, "w") as f:
-                json.dump(label_mappings, f, indent=2)
+            # Print summary table
+            logger.info(f"\n{'='*80}")
+            logger.info("MODALITY ANALYSIS SUMMARY")
+            logger.info(f"{'='*80}")
+            logger.info(f"{'Modality':<20} {'Accuracy':<10} {'F1 Score':<10} {'Loss':<10}")
+            logger.info(f"{'-'*80}")
             
-            logger.info(f"Model, training history, and label mappings saved in {model_save_dir}")
+            for modality_name, metrics in modality_results.items():
+                logger.info(f"{modality_name:<20} {metrics['val_accuracy']:<10.4f} {metrics['val_f1']:<10.4f} {metrics['val_loss']:<10.4f}")
+            
+            logger.info(f"\nResults saved to {results_dir}")
     
     except Exception as e:
-        logger.error(f"Error during training: {str(e)}")
+        logger.error(f"Error during modality analysis: {str(e)}")
         raise
     finally:
         cleanup_distributed()
