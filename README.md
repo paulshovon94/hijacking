@@ -1,4 +1,4 @@
-# Model Hijacking Attack Research
+# Stealing the Recipe: Hyperparameter Stealing Attacks on Fine-Tuned LLMs
 
 This repository contains code for research on model hijacking/poisoning attacks on text summarization models. The project demonstrates how adversarial data transformations can be used to extract hyperparameter information from trained language models through their output behavior.
 
