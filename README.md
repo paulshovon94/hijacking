@@ -32,7 +32,7 @@ pip install -r requirements.txt
      ```
 
 3. Configure cache directory (optional):
-   - The code uses `/work/shovon/LLM/` as the default cache directory
+   - The code uses `/work/../LLM/` as the default cache directory
    - You can modify the `CACHE_DIR` variable in the scripts to use a different location
 
 ## Project Structure
