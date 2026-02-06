@@ -35,6 +35,259 @@ pip install -r requirements.txt
    - The code uses `/work/../LLM/` as the default cache directory
    - You can modify the `CACHE_DIR` variable in the scripts to use a different location
 
+## Minimal end-to-end pipeline (exact commands)
+
+Perfect — here is the minimal end-to-end pipeline, step by step, with the exact command to run for each step.
+No shell script, no extras, only the commands you need in order.
+
+### Step 1: Create pseudo-dataset (IMDB summaries)
+
+Generates IMDB summaries using a public summarization model.
+
+```bash
+cd summarization/imdb_code && python prepare_imdb_summaries.py
+```
+
+(Output: `summarization/pseudo_data/imdb/train.csv`, `summarization/pseudo_data/imdb/test.csv`)
+
+### Step 2: Create hijacking token sets
+
+Extracts stopwords, builds label-specific token sets.
+
+```bash
+cd summarization/imdb_code && python pre_imdb_token_set.py
+```
+
+(Output: stopword lists + frequency files in `summarization/transformed_data/imdb/`)
+
+### Step 3: Create transformed (hijacking) dataset
+
+Applies BERT-based word substitution attack to create hijacked summaries.
+
+```bash
+cd summarization/imdb_code && python imdb_attack.py
+```
+
+(Output: `summarization/transformed_data/imdb/train.csv`, `summarization/transformed_data/imdb/test.csv`)
+
+### Step 4: Merge transformed train/test datasets
+
+Creates a single hijacking dataset.
+
+```bash
+cd summarization/imdb_code && python combine_datasets.py
+```
+
+(Output: `summarization/transformed_data/imdb/hijacking_imdb.csv`)
+
+### Step 5: Prepare CNN/DailyMail dataset
+
+Downloads and preprocesses CNN/DailyMail for summarization.
+
+```bash
+cd summarization/imdb_code && python prepare_cnn_dailymail.py
+```
+
+(Output: processed CNN/DailyMail files)
+
+### Step 6: Combine CNN/DailyMail + hijacking data
+
+Creates the final JSON dataset used for training shadow models.
+
+```bash
+cd summarization/imdb_code && python prepare_json_data.py
+```
+
+(Output: training/validation/test JSON files)
+
+### Step 7: Generate shadow-model configurations
+
+Creates YAML configs for all hyperparameter combinations.
+
+```bash
+cd summarization/imdb_code && python generate_configs.py
+```
+
+(Output: YAML config files + `config_summary.csv`)
+
+### Step 8: Train shadow models
+
+Run the appropriate trainer depending on model family.
+
+BART (encoder–decoder)
+
+```bash
+cd summarization/imdb_code && torchrun --nproc-per-node=2 train_shadow_models.py --model_indices 0-9
+```
+
+Pegasus
+
+```bash
+cd summarization/imdb_code && torchrun --nproc-per-node=2 train_shadow_models_pegasus.py --model_indices 91-107
+```
+
+GPT-2 (decoder-only)
+
+```bash
+cd summarization/imdb_code && torchrun --nproc-per-node=2 train_shadow_models_gpt2.py --model_indices 159-161
+```
+
+(You only run the families you need.)
+
+### Step 9: Extract behavioral features (x1–x7)
+
+Computes ROUGE, JSD, novelty, semantic distance, etc.
+
+BART
+
+```bash
+cd summarization/imdb_code && torchrun --nproc-per-node=2 create_model_features.py
+```
+
+Pegasus
+
+```bash
+cd summarization/imdb_code && torchrun --nproc-per-node=2 create_model_features_pegasus.py --model_indices 100-103
+```
+
+GPT-2
+
+```bash
+cd summarization/imdb_code && torchrun --nproc-per-node=2 create_model_features_gpt2.py --model_indices 184-188
+```
+
+(Output: feature files x1–x7 for each model)
+
+### Step 10: Create dataloader for attack model
+
+Aggregates features and labels into a unified dataset.
+
+```bash
+cd summarization/imdb_code && python create_dataloader.py
+```
+
+(Output: `dataloader.csv`, `label_mappings.json`)
+
+### Step 11: Train the attack (hyperparameter-stealing) model
+
+Trains the multimodal classifier to predict hyperparameters.
+
+```bash
+cd summarization/imdb_code && torchrun --nproc-per-node=1 experiment.py --seed 42
+```
+
+(Optional deterministic run)
+
+```bash
+cd summarization/imdb_code && torchrun --nproc-per-node=1 experiment.py --seed 42 --deterministic
+```
+
+## Additional experiments (exact commands)
+
+### Poisoning attack success rate
+
+Script: `poisioning_exp.py`
+
+Inference (evaluate attack success)
+
+```bash
+cd summarization/imdb_code && torchrun --nproc-per-node=1 --master_port=29600 poisioning_exp.py --mode inference
+```
+
+Train (if your script supports training mode)
+
+```bash
+cd summarization/imdb_code && torchrun --nproc-per-node=1 --master_port=29600 poisioning_exp.py --mode train
+```
+
+### Clean-data poisoning experiment (victim models + transfer)
+
+Script: `clean_data_poisioning_exp.py`
+
+Inference (evaluate on selected model indices)
+
+```bash
+cd summarization/imdb_code && torchrun --nproc-per-node=1 --master_port=29600 clean_data_poisioning_exp.py   --mode inference --model_indices "23-26,100-103"
+```
+
+Note: your doc says “Selected multi-model indices (23-26, 100-103)”.
+
+### Subsampling experiment
+
+Script: `subsampling_exp.py`
+
+```bash
+cd summarization/imdb_code && torchrun --nproc-per-node=1 --master_port=29600 subsampling_exp.py
+```
+
+### Cross-family transferability
+
+Script: `cross_family_attack.py`
+
+Train on BART+Pegasus, test on GPT-2
+
+```bash
+cd summarization/imdb_code && torchrun --nproc-per-node=1 cross_family_attack.py   --train_families BART Pegasus --test_families GPT-2
+```
+
+With fixed seed + deterministic behavior
+
+```bash
+cd summarization/imdb_code && torchrun --nproc-per-node=1 cross_family_attack.py --seed 42 --deterministic
+```
+
+### Main “multimodel” training experiment runner
+
+Script: `experiment.py`
+
+Standard run
+
+```bash
+cd summarization/imdb_code && torchrun --nproc-per-node=1 experiment.py --seed 42
+```
+
+Deterministic run
+
+```bash
+cd summarization/imdb_code && torchrun --nproc-per-node=1 experiment.py --seed 42 --deterministic
+```
+
+### Modality ablation (x1-only → x1..x7)
+
+Script: `exp_modality.py`
+
+```bash
+cd summarization/imdb_code && python exp_modality.py
+```
+
+### Feature corruption checks + fixing
+
+Script: `diagnose_corruption.py` (scan for NaN/Inf/etc.)
+
+```bash
+cd summarization/imdb_code && python diagnose_corruption.py
+```
+
+Script: `sanitize_features.py` (replace NaN/Inf with safe values)
+
+```bash
+cd summarization/imdb_code && python sanitize_features.py
+```
+
+### Older classifier scripts (if you still use them)
+
+Script: `train_multilabel_classifier_x1.py`
+
+```bash
+cd summarization/imdb_code && torchrun --nproc-per-node=2 train_multilabel_classifier_x1.py
+```
+
+Script: `train_multiclass_classifier_x2-7.py`
+
+```bash
+cd summarization/imdb_code && torchrun --nproc-per-node=2 train_multiclass_classifier_x2-7.py
+```
+
 ## Project Structure
 
 ```
