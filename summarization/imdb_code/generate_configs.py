@@ -161,6 +161,28 @@ class ModelRegistry:
             )
         ]
 
+        # Phi models
+        self.models['Phi'] = [
+            ModelConfig(
+                name='microsoft/phi-1_5',
+                type='decoder-only',
+                size='1.5',
+                family='Phi',
+                optimizers=['adamw', 'sgd', 'adafactor'],
+                learning_rates=[1e-5, 5e-5, 1e-4],
+                batch_sizes=[4, 8, 16]
+            ),
+            ModelConfig(
+                name='microsoft/phi-2',
+                type='decoder-only',
+                size='2',
+                family='Phi',
+                optimizers=['adamw', 'sgd', 'adafactor'],
+                learning_rates=[1e-5, 5e-5, 1e-4],
+                batch_sizes=[4, 8, 16]
+            )
+        ]
+
         # Mistral models
         # self.models['Mistral'] = [
         #     ModelConfig(
@@ -245,9 +267,21 @@ class ConfigGenerator:
     def create_config(self, model: ModelConfig, hp_combination: Dict[str, Any]) -> Dict[str, Any]:
         """Create a configuration dictionary for a specific model and hyperparameter combination."""
         # Set model-specific configurations
-        max_source_length = 512 if model.family == "Pegasus" else 1024
-        fp16 = False if model.family == "Pegasus" else True
-        bf16 = True if model.family == "Pegasus" else False
+        # Pegasus: max_source_length=512, fp16=False, bf16=True
+        # Phi: max_source_length=512, fp16=False, bf16=True (A100 optimized)
+        # Others: max_source_length=1024, fp16=True, bf16=False
+        if model.family == "Pegasus":
+            max_source_length = 512
+            fp16 = False
+            bf16 = True
+        elif model.family == "Phi":
+            max_source_length = 512
+            fp16 = False  # A100: prefer bf16 over fp16
+            bf16 = True   # A100: use bf16 for better performance and memory efficiency
+        else:
+            max_source_length = 1024
+            fp16 = True
+            bf16 = False
         
         training_config = TrainingConfig(
             optimizer=hp_combination['optimizer'],
@@ -279,8 +313,8 @@ class ConfigGenerator:
             }
         }
         
-        # Add bf16 configuration for Pegasus models
-        if model.family == "Pegasus":
+        # Add bf16 configuration for Pegasus and Phi models
+        if model.family in ["Pegasus", "Phi"]:
             config['training']['bf16'] = bf16
         
         return config

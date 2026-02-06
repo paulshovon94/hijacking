@@ -146,7 +146,7 @@ def main():
         train_data, val_data = read_and_format_data(
             os.path.join(CNN_DIR, "train.csv"),
             hijacking_df,
-            split_ratio=0.8
+            split_ratio=.3 #changed from 0.8 to 1.0 to 0.3
         )
         
         # Save training data
