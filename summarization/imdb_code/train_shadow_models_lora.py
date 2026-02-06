@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 
 """
-Script to train shadow models using generated YAML configurations.
-Trains multiple models with different hyperparameter combinations.
+Script to train shadow models using LoRA (Low-Rank Adaptation) fine-tuning.
+Trains multiple models with different hyperparameter combinations using LoRA.
 """
 
 import os
@@ -34,6 +34,15 @@ import numpy as np
 import random
 import argparse
 import pandas as pd
+from peft import (
+    LoraConfig,
+    get_peft_model,
+    TaskType,
+    PeftModel,
+    prepare_model_for_kbit_training
+)
+from peft.tuners.lora import LoraLayer
+import bitsandbytes as bnb
 
 # Configure logging
 logging.basicConfig(
@@ -149,6 +158,21 @@ def get_model_and_tokenizer(config: Dict[str, Any]):
     model_name = config['model']['name']
     model_type = config['model']['type']
     
+    # Determine precision settings
+    use_bf16 = config['training'].get('bf16', False)
+    use_fp16 = config['training'].get('fp16', False)
+    
+    # Set torch dtype based on availability and configuration
+    if use_bf16 and torch.cuda.is_bf16_supported():
+        torch_dtype = torch.bfloat16
+        logger.info("Using bfloat16 precision")
+    elif use_fp16 and torch.cuda.is_available():
+        torch_dtype = torch.float16
+        logger.info("Using float16 precision")
+    else:
+        torch_dtype = torch.float32
+        logger.info("Using float32 precision")
+    
     if model_type == 'encoder-decoder':
         if 'bart' in model_name.lower():
             tokenizer = BartTokenizer.from_pretrained(
@@ -157,7 +181,9 @@ def get_model_and_tokenizer(config: Dict[str, Any]):
             )
             model = BartForConditionalGeneration.from_pretrained(
                 model_name,
-                cache_dir=os.environ['TRANSFORMERS_CACHE']
+                cache_dir=os.environ['TRANSFORMERS_CACHE'],
+                torch_dtype=torch_dtype,
+                device_map="auto" if torch.cuda.is_available() else None
             )
         elif 'pegasus' in model_name.lower():
             tokenizer = PegasusTokenizer.from_pretrained(
@@ -166,7 +192,9 @@ def get_model_and_tokenizer(config: Dict[str, Any]):
             )
             model = PegasusForConditionalGeneration.from_pretrained(
                 model_name,
-                cache_dir=os.environ['TRANSFORMERS_CACHE']
+                cache_dir=os.environ['TRANSFORMERS_CACHE'],
+                torch_dtype=torch_dtype,
+                device_map="auto" if torch.cuda.is_available() else None
             )
         else:
             raise ValueError(f"Unsupported encoder-decoder model: {model_name}")
@@ -178,7 +206,9 @@ def get_model_and_tokenizer(config: Dict[str, Any]):
             )
             model = GPT2LMHeadModel.from_pretrained(
                 model_name,
-                cache_dir=os.environ['TRANSFORMERS_CACHE']
+                cache_dir=os.environ['TRANSFORMERS_CACHE'],
+                torch_dtype=torch_dtype,
+                device_map="auto" if torch.cuda.is_available() else None
             )
         else:
             tokenizer = AutoTokenizer.from_pretrained(
@@ -187,22 +217,73 @@ def get_model_and_tokenizer(config: Dict[str, Any]):
             )
             model = AutoModelForCausalLM.from_pretrained(
                 model_name,
-                cache_dir=os.environ['TRANSFORMERS_CACHE']
+                cache_dir=os.environ['TRANSFORMERS_CACHE'],
+                torch_dtype=torch_dtype,
+                device_map="auto" if torch.cuda.is_available() else None
             )
     
+    # Add padding token if it doesn't exist
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    
     return model, tokenizer
+
+def create_lora_config(config: Dict[str, Any]) -> LoraConfig:
+    """Create LoRA configuration based on model type and training config."""
+    model_type = config['model']['type']
+    
+    # Default LoRA parameters
+    lora_config = {
+        "r": config['lora'].get('r', 16),
+        "lora_alpha": config['lora'].get('lora_alpha', 32),
+        "target_modules": config['lora'].get('target_modules', None),
+        "lora_dropout": config['lora'].get('lora_dropout', 0.1),
+        "bias": config['lora'].get('bias', "none"),
+        "task_type": TaskType.CAUSAL_LM if model_type == 'decoder-only' else TaskType.SEQ_2_SEQ_LM,
+    }
+    
+    # Set target modules based on model type if not specified
+    if lora_config["target_modules"] is None:
+        if 'bart' in config['model']['name'].lower():
+            lora_config["target_modules"] = ["q_proj", "v_proj", "k_proj", "out_proj", "fc1", "fc2"]
+        elif 'pegasus' in config['model']['name'].lower():
+            lora_config["target_modules"] = ["q_proj", "v_proj", "k_proj", "out_proj", "fc1", "fc2"]
+        elif 'gpt2' in config['model']['name'].lower():
+            lora_config["target_modules"] = ["c_attn", "c_proj", "c_fc"]
+        else:
+            # Generic target modules for other models
+            lora_config["target_modules"] = ["q_proj", "v_proj", "k_proj", "out_proj", "fc1", "fc2"]
+    
+    return LoraConfig(**lora_config)
+
+def apply_lora_to_model(model, lora_config: LoraConfig, config: Dict[str, Any]):
+    """Apply LoRA to the model."""
+    # Prepare model for k-bit training if using quantization
+    if config['training'].get('use_4bit', False):
+        model = prepare_model_for_kbit_training(model)
+    
+    # Apply LoRA
+    model = get_peft_model(model, lora_config)
+    
+    # Print trainable parameters
+    model.print_trainable_parameters()
+    
+    return model
 
 def get_optimizer(model, config: Dict[str, Any]):
     """Get optimizer based on configuration."""
     optimizer_name = config['training']['optimizer']
     learning_rate = config['training']['learning_rate']
     
+    # For LoRA, we typically use a higher learning rate
+    lora_learning_rate = config['lora'].get('learning_rate', learning_rate * 2)
+    
     if optimizer_name == 'adamw':
-        return AdamW(model.parameters(), lr=learning_rate)
+        return AdamW(model.parameters(), lr=lora_learning_rate)
     elif optimizer_name == 'sgd':
-        return torch.optim.SGD(model.parameters(), lr=learning_rate)
+        return torch.optim.SGD(model.parameters(), lr=lora_learning_rate)
     elif optimizer_name == 'adafactor':
-        return Adafactor(model.parameters(), lr=learning_rate, scale_parameter=True, relative_step=False)
+        return Adafactor(model.parameters(), lr=lora_learning_rate, scale_parameter=True, relative_step=False)
     else:
         raise ValueError(f"Unsupported optimizer: {optimizer_name}")
 
@@ -224,13 +305,23 @@ def calculate_gradient_accumulation_steps(per_device_batch_size: int, target_eff
     return gradient_accumulation_steps
 
 def train_model(config_path: str, model_index: int) -> None:
-    """Train a model using the specified configuration."""
+    """Train a model using LoRA fine-tuning with the specified configuration."""
     # Get local rank for distributed training
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     
     # Load configuration
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
+    
+    # Add default LoRA configuration if not present
+    if 'lora' not in config:
+        config['lora'] = {
+            'r': 16,
+            'lora_alpha': 32,
+            'lora_dropout': 0.1,
+            'bias': 'none',
+            'learning_rate': config['training']['learning_rate'] * 2
+        }
     
     # Set up logging
     model_name = config['model']['name']
@@ -241,14 +332,15 @@ def train_model(config_path: str, model_index: int) -> None:
         logger.info(f"Model already exists at {output_dir}/final_model. Skipping training.")
         return
     
-    logger.info(f"\nTraining model: {model_name}")
+    logger.info(f"\nTraining model with LoRA: {model_name}")
     logger.info(f"Configuration: {config['training']}")
+    logger.info(f"LoRA Configuration: {config['lora']}")
     
     # Initialize wandb only on main process
     if local_rank == 0:
         wandb.init(
-            project="shadow-model-training-30-imdb",
-            name=f"model_{model_index}_{config['model']['family']}_{config['model']['size']}_{config['training']['optimizer']}_lr{config['training']['learning_rate']}_bs{config['training']['batch_size']}",
+            project="shadow-model-training-lora",
+            name=f"lora_model_{model_index}_{config['model']['family']}_{config['model']['size']}_{config['training']['optimizer']}_lr{config['lora']['learning_rate']}_bs{config['training']['batch_size']}",
             config=config
         )
     
@@ -258,6 +350,12 @@ def train_model(config_path: str, model_index: int) -> None:
         
         # Get model and tokenizer
         model, tokenizer = get_model_and_tokenizer(config)
+        
+        # Create LoRA configuration
+        lora_config = create_lora_config(config)
+        
+        # Apply LoRA to model
+        model = apply_lora_to_model(model, lora_config, config)
         
         # Load datasets with cache directory
         train_dataset = SummarizationDataset(
@@ -285,10 +383,28 @@ def train_model(config_path: str, model_index: int) -> None:
             per_device_batch_size=config['training']['batch_size']
         )
         
+        # Determine precision settings for training
+        use_bf16 = config['training'].get('bf16', False)
+        use_fp16 = config['training'].get('fp16', False)
+        
+        # Set precision flags based on availability and configuration
+        if use_bf16 and torch.cuda.is_bf16_supported():
+            bf16 = True
+            fp16 = False
+            logger.info("Training with bfloat16 precision")
+        elif use_fp16 and torch.cuda.is_available():
+            bf16 = False
+            fp16 = True
+            logger.info("Training with float16 precision")
+        else:
+            bf16 = False
+            fp16 = False
+            logger.info("Training with float32 precision")
+        
         # Configure training arguments
         training_args = Seq2SeqTrainingArguments(
             output_dir=config['output']['output_dir'],
-            num_train_epochs=int(config['training']['num_train_epochs']),  # Ensure it's an integer
+            num_train_epochs=int(config['training']['num_train_epochs']),
             per_device_train_batch_size=config['training']['batch_size'],
             per_device_eval_batch_size=config['training']['batch_size'],
             warmup_steps=config['training']['warmup_steps'],
@@ -297,22 +413,26 @@ def train_model(config_path: str, model_index: int) -> None:
             logging_steps=config['training']['logging_steps'],
             eval_steps=config['training']['eval_steps'],
             save_steps=config['training']['save_steps'],
-            gradient_accumulation_steps=gradient_accumulation_steps,  # Use calculated value
-            fp16=config['training']['fp16'],
-            report_to="wandb" if local_rank == 0 else "none",  # Only report to wandb on main process
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            bf16=bf16,
+            fp16=fp16,
+            report_to="wandb" if local_rank == 0 else "none",
             generation_max_length=config['training']['generation_max_length'],
             predict_with_generate=True,
             generation_num_beams=config['training']['generation_num_beams'],
-            learning_rate=config['training']['learning_rate'],
+            learning_rate=config['lora']['learning_rate'],  # Use LoRA learning rate
             lr_scheduler_type=config['training'].get('lr_scheduler_type', 'linear'),
-            max_steps=-1,  # Ensure we use num_train_epochs instead of max_steps
-            save_total_limit=2,  # Keep only the last 2 checkpoints
-            load_best_model_at_end=True,  # Load the best model at the end of training
-            metric_for_best_model="eval_loss",  # Use eval_loss to determine the best model
-            greater_is_better=False,  # Lower eval_loss is better
-            evaluation_strategy="steps",  # Match the save strategy
-            save_strategy="steps",  # Explicitly set save strategy
-            eval_accumulation_steps=1  # Accumulate evaluation results
+            max_steps=-1,
+            save_total_limit=2,
+            load_best_model_at_end=True,
+            metric_for_best_model="eval_loss",
+            greater_is_better=False,
+            evaluation_strategy="steps",
+            save_strategy="steps",
+            eval_accumulation_steps=1,
+            # LoRA-specific settings
+            remove_unused_columns=False,
+            dataloader_pin_memory=False,
         )
         
         # Initialize data collator
@@ -335,17 +455,20 @@ def train_model(config_path: str, model_index: int) -> None:
         
         # Train model
         start_time = time.time()
-        logger.info("Starting training...")
+        logger.info("Starting LoRA training...")
         
         trainer.train()
         
         # Calculate and log training duration
         end_time = time.time()
         training_duration = timedelta(seconds=int(end_time - start_time))
-        logger.info(f"Training completed in {training_duration}")
+        logger.info(f"LoRA training completed in {training_duration}")
         
-        # Save model
+        # Save model (this will save the LoRA adapters)
         trainer.save_model(os.path.join(config['output']['output_dir'], "final_model"))
+        
+        # Save the base model and LoRA adapters separately for easier loading
+        model.save_pretrained(os.path.join(config['output']['output_dir'], "lora_adapters"))
         
         # Evaluate on test set
         logger.info("Evaluating on test set...")
@@ -357,19 +480,19 @@ def train_model(config_path: str, model_index: int) -> None:
             wandb.log(test_results)
         
     except Exception as e:
-        logger.error(f"Error training model {model_name}: {str(e)}")
+        logger.error(f"Error training LoRA model {model_name}: {str(e)}")
         raise
     finally:
         if local_rank == 0:
             wandb.finish()
 
 def main():
-    """Main function to train shadow models."""
+    """Main function to train shadow models with LoRA."""
     import argparse
     import pandas as pd
     
     # Set up argument parser
-    parser = argparse.ArgumentParser(description='Train shadow models')
+    parser = argparse.ArgumentParser(description='Train shadow models with LoRA')
     parser.add_argument('--model_indices', type=str, nargs='+', 
                       help='Indices of models to train. Can be individual indices (e.g., 1 2 3) or ranges (e.g., 0-9).')
     args = parser.parse_args()
@@ -406,7 +529,7 @@ def main():
         config_df = config_df[config_df['model_index'].isin(selected_indices)]
         logger.info(f"Processing {len(config_df)} specified models")
     
-    logger.info(f"Training {len(config_df)} shadow models")
+    logger.info(f"Training {len(config_df)} shadow models with LoRA")
     
     # Train models
     for _, row in config_df.iterrows():
@@ -416,8 +539,8 @@ def main():
         try:
             train_model(config_path, model_index)
         except Exception as e:
-            logger.error(f"Failed to train model with config {config_path}: {str(e)}")
+            logger.error(f"Failed to train LoRA model with config {config_path}: {str(e)}")
             continue
 
 if __name__ == "__main__":
-    main() 
+    main()

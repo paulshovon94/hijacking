@@ -118,6 +118,15 @@ class ModelRegistry:
                 optimizers=['adamw', 'sgd', 'adafactor'],
                 learning_rates=[1e-5, 5e-5, 1e-4],
                 batch_sizes=[4, 8, 16]
+            ),
+            ModelConfig(
+                name='google/pegasus-large',
+                type='encoder-decoder',
+                size='large',
+                family='Pegasus',
+                optimizers=['adamw', 'sgd', 'adafactor'],
+                learning_rates=[1e-5, 5e-5, 1e-4],
+                batch_sizes=[4, 8, 16]
             )
         ]
 
@@ -152,71 +161,93 @@ class ModelRegistry:
             )
         ]
 
-        # Mistral models
-        self.models['Mistral'] = [
+        # Phi models
+        self.models['Phi'] = [
             ModelConfig(
-                name='mistralai/Mistral-7B-v0.1',
+                name='microsoft/phi-1_5',
                 type='decoder-only',
-                size='7B',
-                family='Mistral',
+                size='1.5',
+                family='Phi',
+                optimizers=['adamw', 'sgd', 'adafactor'],
+                learning_rates=[1e-5, 5e-5, 1e-4],
+                batch_sizes=[4, 8, 16]
+            ),
+            ModelConfig(
+                name='microsoft/phi-2',
+                type='decoder-only',
+                size='2',
+                family='Phi',
                 optimizers=['adamw', 'sgd', 'adafactor'],
                 learning_rates=[1e-5, 5e-5, 1e-4],
                 batch_sizes=[4, 8, 16]
             )
         ]
+
+        # Mistral models
+        # self.models['Mistral'] = [
+        #     ModelConfig(
+        #         name='mistralai/Mistral-7B-v0.1',
+        #         type='decoder-only',
+        #         size='7B',
+        #         family='Mistral',
+        #         optimizers=['adamw', 'sgd', 'adafactor'],
+        #         learning_rates=[1e-5, 5e-5, 1e-4],
+        #         batch_sizes=[4, 8, 16]
+        #     )
+        # ]
 
         # Qwen models
-        self.models['Qwen'] = [
-            ModelConfig(
-                name='Qwen/Qwen1.5-0.5B',
-                type='decoder-only',
-                size='0.5B',
-                family='Qwen',
-                optimizers=['adamw', 'sgd', 'adafactor'],
-                learning_rates=[1e-5, 5e-5, 1e-4],
-                batch_sizes=[4, 8, 16]
-            ),
-            ModelConfig(
-                name='Qwen/Qwen1.5-1.8B',
-                type='decoder-only',
-                size='1.8B',
-                family='Qwen',
-                optimizers=['adamw', 'sgd', 'adafactor'],
-                learning_rates=[1e-5, 5e-5, 1e-4],
-                batch_sizes=[4, 8, 16]
-            ),
-            ModelConfig(
-                name='Qwen/Qwen1.5-7B',
-                type='decoder-only',
-                size='7B',
-                family='Qwen',
-                optimizers=['adamw', 'sgd', 'adafactor'],
-                learning_rates=[1e-5, 5e-5, 1e-4],
-                batch_sizes=[4, 8, 16]
-            )
-        ]
+        # self.models['Qwen'] = [
+        #     ModelConfig(
+        #         name='Qwen/Qwen1.5-0.5B',
+        #         type='decoder-only',
+        #         size='0.5B',
+        #         family='Qwen',
+        #         optimizers=['adamw', 'sgd', 'adafactor'],
+        #         learning_rates=[1e-5, 5e-5, 1e-4],
+        #         batch_sizes=[4, 8, 16]
+        #     ),
+        #     ModelConfig(
+        #         name='Qwen/Qwen1.5-1.8B',
+        #         type='decoder-only',
+        #         size='1.8B',
+        #         family='Qwen',
+        #         optimizers=['adamw', 'sgd', 'adafactor'],
+        #         learning_rates=[1e-5, 5e-5, 1e-4],
+        #         batch_sizes=[4, 8, 16]
+        #     ),
+        #     ModelConfig(
+        #         name='Qwen/Qwen1.5-7B',
+        #         type='decoder-only',
+        #         size='7B',
+        #         family='Qwen',
+        #         optimizers=['adamw', 'sgd', 'adafactor'],
+        #         learning_rates=[1e-5, 5e-5, 1e-4],
+        #         batch_sizes=[4, 8, 16]
+        #     )
+        # ]
 
         # LLaMA models
-        self.models['LLaMA'] = [
-            ModelConfig(
-                name='meta-llama/Llama-2-7b-hf',
-                type='decoder-only',
-                size='7B',
-                family='LLaMA',
-                optimizers=['adamw', 'sgd', 'adafactor'],
-                learning_rates=[1e-5, 5e-5, 1e-4],
-                batch_sizes=[4, 8, 16]
-            ),
-            ModelConfig(
-                name='meta-llama/Llama-2-13b-hf',
-                type='decoder-only',
-                size='13B',
-                family='LLaMA',
-                optimizers=['adamw', 'sgd', 'adafactor'],
-                learning_rates=[1e-5, 5e-5, 1e-4],
-                batch_sizes=[4, 8, 16]
-            )
-        ]
+        # self.models['LLaMA'] = [
+        #     ModelConfig(
+        #         name='meta-llama/Llama-2-7b-hf',
+        #         type='decoder-only',
+        #         size='7B',
+        #         family='LLaMA',
+        #         optimizers=['adamw', 'sgd', 'adafactor'],
+        #         learning_rates=[1e-5, 5e-5, 1e-4],
+        #         batch_sizes=[4, 8, 16]
+        #     ),
+        #     ModelConfig(
+        #         name='meta-llama/Llama-2-13b-hf',
+        #         type='decoder-only',
+        #         size='13B',
+        #         family='LLaMA',
+        #         optimizers=['adamw', 'sgd', 'adafactor'],
+        #         learning_rates=[1e-5, 5e-5, 1e-4],
+        #         batch_sizes=[4, 8, 16]
+        #     )
+        # ]
     
     def get_all_models(self) -> List[ModelConfig]:
         """Get all registered models."""
@@ -235,16 +266,34 @@ class ConfigGenerator:
     
     def create_config(self, model: ModelConfig, hp_combination: Dict[str, Any]) -> Dict[str, Any]:
         """Create a configuration dictionary for a specific model and hyperparameter combination."""
+        # Set model-specific configurations
+        # Pegasus: max_source_length=512, fp16=False, bf16=True
+        # Phi: max_source_length=512, fp16=False, bf16=True (A100 optimized)
+        # Others: max_source_length=1024, fp16=True, bf16=False
+        if model.family == "Pegasus":
+            max_source_length = 512
+            fp16 = False
+            bf16 = True
+        elif model.family == "Phi":
+            max_source_length = 512
+            fp16 = False  # A100: prefer bf16 over fp16
+            bf16 = True   # A100: use bf16 for better performance and memory efficiency
+        else:
+            max_source_length = 1024
+            fp16 = True
+            bf16 = False
+        
         training_config = TrainingConfig(
             optimizer=hp_combination['optimizer'],
             learning_rate=hp_combination['learning_rate'],
-            batch_size=hp_combination['batch_size']
+            batch_size=hp_combination['batch_size'],
+            fp16=fp16
         )
         
         # Create the full model name for the output directory
         full_model_name = f"{model.family.lower()}_{model.size}_{hp_combination['optimizer']}_lr{hp_combination['learning_rate']}_bs{hp_combination['batch_size']}"
         
-        return {
+        config = {
             'model': {
                 'name': model.name,
                 'type': model.type,
@@ -255,7 +304,7 @@ class ConfigGenerator:
             'data': {
                 'train_file': '../transformed_data/imdb/train.json',
                 'test_file': '../transformed_data/imdb/test.json',
-                'max_source_length': 1024,
+                'max_source_length': max_source_length,
                 'max_target_length': 128
             },
             'output': {
@@ -263,6 +312,12 @@ class ConfigGenerator:
                 'logging_dir': f'./logs/{model.family.lower()}/{model.size}/{full_model_name}'
             }
         }
+        
+        # Add bf16 configuration for Pegasus and Phi models
+        if model.family in ["Pegasus", "Phi"]:
+            config['training']['bf16'] = bf16
+        
+        return config
     
     def get_model_hp_combinations(self, model: ModelConfig) -> List[Dict[str, Any]]:
         """Generate all hyperparameter combinations for a specific model."""
@@ -304,6 +359,7 @@ class ConfigGenerator:
             'weight_decay',
             'gradient_accumulation_steps',
             'fp16',
+            'bf16',
             'logging_steps',
             'eval_steps',
             'save_steps',
@@ -366,6 +422,7 @@ class ConfigGenerator:
                         'weight_decay': config['training']['weight_decay'],
                         'gradient_accumulation_steps': config['training']['gradient_accumulation_steps'],
                         'fp16': config['training']['fp16'],
+                        'bf16': config['training'].get('bf16', False),
                         'logging_steps': config['training']['logging_steps'],
                         'eval_steps': config['training']['eval_steps'],
                         'save_steps': config['training']['save_steps'],

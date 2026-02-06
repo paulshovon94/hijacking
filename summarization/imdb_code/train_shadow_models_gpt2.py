@@ -2,8 +2,12 @@
 # -*- coding: utf-8 -*-
 
 """
-Script to train shadow models using generated YAML configurations.
-Trains multiple models with different hyperparameter combinations.
+Script to train GPT-2 shadow models using generated YAML configurations.
+Specialized for GPT-2 models with specific configurations:
+- max_source_length = 1024 # for GPT-2 large tryoing with 1024, others are finetuned with 1024
+- fp16 = True
+- bf16 = False
+- Decoder-only architecture for text generation
 """
 
 import os
@@ -18,13 +22,10 @@ from typing import Dict, Any, Optional
 from datetime import timedelta
 import time
 from transformers import (
-    BartTokenizer, BartForConditionalGeneration,
-    PegasusTokenizer, PegasusForConditionalGeneration,
     GPT2Tokenizer, GPT2LMHeadModel,
-    AutoTokenizer, AutoModelForCausalLM,
     Trainer,
-    Seq2SeqTrainingArguments,
-    DataCollatorForSeq2Seq,
+    TrainingArguments,
+    DataCollatorForLanguageModeling,
     AdamW,
     Adafactor,
     get_scheduler
@@ -66,12 +67,11 @@ def set_seed(seed: int = 42) -> None:
     torch.cuda.manual_seed_all(seed)
 
 class SummarizationDataset:
-    """Dataset class for handling summarization data."""
+    """Dataset class for handling summarization data for GPT-2 text generation."""
     
-    def __init__(self, file_path: str, tokenizer, max_source_length: int = 1024, max_target_length: int = 128):
+    def __init__(self, file_path: str, tokenizer, max_source_length: int = 1024):
         self.tokenizer = tokenizer
         self.max_source_length = max_source_length
-        self.max_target_length = max_target_length
         self.file_path = file_path
         
         # Load data
@@ -86,24 +86,24 @@ class SummarizationDataset:
             self.summaries.append(item['summarize'])
 
     def preprocess_function(self, examples: Dict) -> Dict:
-        """Preprocess and tokenize input examples."""
-        inputs = ["summarize: " + doc for doc in examples["input_text"]]
+        """Preprocess and tokenize input examples for GPT-2 text generation."""
+        # For GPT-2, we'll format the input as: "Text: {input_text} Summary: {summary}"
+        # This allows the model to learn the summarization task
+        inputs = []
+        for text, summary in zip(examples["input_text"], examples["target_text"]):
+            formatted_input = f"Text: {text} Summary: {summary}"
+            inputs.append(formatted_input)
         
         model_inputs = self.tokenizer(
             inputs,
             max_length=self.max_source_length,
             padding="max_length",
             truncation=True,
+            return_tensors="pt"
         )
 
-        labels = self.tokenizer(
-            text_target=examples["target_text"],
-            max_length=self.max_target_length,
-            padding="max_length",
-            truncation=True,
-        )
-
-        model_inputs["labels"] = labels["input_ids"]
+        # For language modeling, the labels are the same as input_ids
+        model_inputs["labels"] = model_inputs["input_ids"].clone()
         return model_inputs
 
     def create_dataset(self) -> HFDataset:
@@ -115,7 +115,7 @@ class SummarizationDataset:
         # Generate unique cache key based on tokenizer and dataset parameters
         tokenizer_name = self.tokenizer.name_or_path
         file_hash = hash(self.file_path)
-        cache_key = f"{tokenizer_name}_{file_hash}_{self.max_source_length}_{self.max_target_length}"
+        cache_key = f"gpt2_{tokenizer_name}_{file_hash}_{self.max_source_length}"
         cache_path = os.path.join(cache_dir, f"{cache_key}.hf")
         
         # Try to load from cache
@@ -144,51 +144,26 @@ class SummarizationDataset:
         
         return processed_dataset
 
-def get_model_and_tokenizer(config: Dict[str, Any]):
-    """Get appropriate model and tokenizer based on configuration."""
+def get_gpt2_model_and_tokenizer(config: Dict[str, Any]):
+    """Get GPT-2 model and tokenizer based on configuration."""
     model_name = config['model']['name']
-    model_type = config['model']['type']
     
-    if model_type == 'encoder-decoder':
-        if 'bart' in model_name.lower():
-            tokenizer = BartTokenizer.from_pretrained(
-                model_name,
-                cache_dir=os.environ['TRANSFORMERS_CACHE']
-            )
-            model = BartForConditionalGeneration.from_pretrained(
-                model_name,
-                cache_dir=os.environ['TRANSFORMERS_CACHE']
-            )
-        elif 'pegasus' in model_name.lower():
-            tokenizer = PegasusTokenizer.from_pretrained(
-                model_name,
-                cache_dir=os.environ['TRANSFORMERS_CACHE']
-            )
-            model = PegasusForConditionalGeneration.from_pretrained(
-                model_name,
-                cache_dir=os.environ['TRANSFORMERS_CACHE']
-            )
-        else:
-            raise ValueError(f"Unsupported encoder-decoder model: {model_name}")
-    else:  # decoder-only
-        if 'gpt2' in model_name.lower():
-            tokenizer = GPT2Tokenizer.from_pretrained(
-                model_name,
-                cache_dir=os.environ['TRANSFORMERS_CACHE']
-            )
-            model = GPT2LMHeadModel.from_pretrained(
-                model_name,
-                cache_dir=os.environ['TRANSFORMERS_CACHE']
-            )
-        else:
-            tokenizer = AutoTokenizer.from_pretrained(
-                model_name,
-                cache_dir=os.environ['TRANSFORMERS_CACHE']
-            )
-            model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                cache_dir=os.environ['TRANSFORMERS_CACHE']
-            )
+    # Validate that this is a GPT-2 model
+    if 'gpt2' not in model_name.lower():
+        raise ValueError(f"Expected GPT-2 model, but got: {model_name}")
+    
+    tokenizer = GPT2Tokenizer.from_pretrained(
+        model_name,
+        cache_dir=os.environ['TRANSFORMERS_CACHE']
+    )
+    model = GPT2LMHeadModel.from_pretrained(
+        model_name,
+        cache_dir=os.environ['TRANSFORMERS_CACHE']
+    )
+    
+    # Set pad token for GPT-2
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     
     return model, tokenizer
 
@@ -223,14 +198,18 @@ def calculate_gradient_accumulation_steps(per_device_batch_size: int, target_eff
     
     return gradient_accumulation_steps
 
-def train_model(config_path: str, model_index: int) -> None:
-    """Train a model using the specified configuration."""
+def train_gpt2_model(config_path: str, model_index: int) -> None:
+    """Train a GPT-2 model using the specified configuration."""
     # Get local rank for distributed training
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     
     # Load configuration
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
+    
+    # Validate that this is a GPT-2 configuration
+    if config['model']['family'] != 'GPT-2':
+        raise ValueError(f"Expected GPT-2 model configuration, but got: {config['model']['family']}")
     
     # Set up logging
     model_name = config['model']['name']
@@ -241,14 +220,14 @@ def train_model(config_path: str, model_index: int) -> None:
         logger.info(f"Model already exists at {output_dir}/final_model. Skipping training.")
         return
     
-    logger.info(f"\nTraining model: {model_name}")
+    logger.info(f"\nTraining GPT-2 model: {model_name}")
     logger.info(f"Configuration: {config['training']}")
     
     # Initialize wandb only on main process
     if local_rank == 0:
         wandb.init(
-            project="shadow-model-training-30-imdb",
-            name=f"model_{model_index}_{config['model']['family']}_{config['model']['size']}_{config['training']['optimizer']}_lr{config['training']['learning_rate']}_bs{config['training']['batch_size']}",
+            project="gpt2-shadow-model-training",
+            name=f"gpt2_{model_index}_{config['model']['size']}_{config['training']['optimizer']}_lr{config['training']['learning_rate']}_bs{config['training']['batch_size']}",
             config=config
         )
     
@@ -256,21 +235,19 @@ def train_model(config_path: str, model_index: int) -> None:
         # Set random seed
         set_seed(42)
         
-        # Get model and tokenizer
-        model, tokenizer = get_model_and_tokenizer(config)
+        # Get GPT-2 model and tokenizer
+        model, tokenizer = get_gpt2_model_and_tokenizer(config)
         
-        # Load datasets with cache directory
+        # Load datasets with GPT-2-specific configurations
         train_dataset = SummarizationDataset(
             config['data']['train_file'],
             tokenizer,
-            config['data']['max_source_length'],
-            config['data']['max_target_length']
+            config['data']['max_source_length']  # Should be 1024 for GPT-2
         )
         test_dataset = SummarizationDataset(
             config['data']['test_file'],
             tokenizer,
-            config['data']['max_source_length'],
-            config['data']['max_target_length']
+            config['data']['max_source_length']  # Should be 1024 for GPT-2
         )
         
         # Convert to HuggingFace datasets with cache directory
@@ -285,10 +262,10 @@ def train_model(config_path: str, model_index: int) -> None:
             per_device_batch_size=config['training']['batch_size']
         )
         
-        # Configure training arguments
-        training_args = Seq2SeqTrainingArguments(
+        # Configure training arguments with GPT-2-specific settings
+        training_args = TrainingArguments(
             output_dir=config['output']['output_dir'],
-            num_train_epochs=int(config['training']['num_train_epochs']),  # Ensure it's an integer
+            num_train_epochs=int(config['training']['num_train_epochs']),
             per_device_train_batch_size=config['training']['batch_size'],
             per_device_eval_batch_size=config['training']['batch_size'],
             warmup_steps=config['training']['warmup_steps'],
@@ -297,30 +274,28 @@ def train_model(config_path: str, model_index: int) -> None:
             logging_steps=config['training']['logging_steps'],
             eval_steps=config['training']['eval_steps'],
             save_steps=config['training']['save_steps'],
-            gradient_accumulation_steps=gradient_accumulation_steps,  # Use calculated value
-            fp16=config['training']['fp16'],
-            report_to="wandb" if local_rank == 0 else "none",  # Only report to wandb on main process
-            generation_max_length=config['training']['generation_max_length'],
-            predict_with_generate=True,
-            generation_num_beams=config['training']['generation_num_beams'],
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            fp16=config['training']['fp16'],  # Should be True for GPT-2
+            bf16=config['training'].get('bf16', False),  # Should be False for GPT-2
+            report_to="wandb" if local_rank == 0 else "none",
             learning_rate=config['training']['learning_rate'],
             lr_scheduler_type=config['training'].get('lr_scheduler_type', 'linear'),
-            max_steps=-1,  # Ensure we use num_train_epochs instead of max_steps
-            save_total_limit=2,  # Keep only the last 2 checkpoints
-            load_best_model_at_end=True,  # Load the best model at the end of training
-            metric_for_best_model="eval_loss",  # Use eval_loss to determine the best model
-            greater_is_better=False,  # Lower eval_loss is better
-            evaluation_strategy="steps",  # Match the save strategy
-            save_strategy="steps",  # Explicitly set save strategy
-            eval_accumulation_steps=1  # Accumulate evaluation results
+            max_steps=-1,
+            save_total_limit=2,
+            load_best_model_at_end=True,
+            metric_for_best_model="eval_loss",
+            greater_is_better=False,
+            evaluation_strategy="steps",
+            save_strategy="steps",
+            eval_accumulation_steps=1,
+            remove_unused_columns=False,
+            dataloader_pin_memory=False
         )
         
-        # Initialize data collator
-        data_collator = DataCollatorForSeq2Seq(
-            tokenizer,
-            model=model,
-            padding=True,
-            return_tensors="pt"
+        # Initialize data collator for language modeling
+        data_collator = DataCollatorForLanguageModeling(
+            tokenizer=tokenizer,
+            mlm=False,  # GPT-2 is not a masked language model
         )
         
         # Initialize trainer
@@ -335,43 +310,43 @@ def train_model(config_path: str, model_index: int) -> None:
         
         # Train model
         start_time = time.time()
-        logger.info("Starting training...")
+        logger.info("Starting GPT-2 training...")
         
         trainer.train()
         
         # Calculate and log training duration
         end_time = time.time()
         training_duration = timedelta(seconds=int(end_time - start_time))
-        logger.info(f"Training completed in {training_duration}")
+        logger.info(f"GPT-2 training completed in {training_duration}")
         
         # Save model
         trainer.save_model(os.path.join(config['output']['output_dir'], "final_model"))
         
         # Evaluate on test set
-        logger.info("Evaluating on test set...")
+        logger.info("Evaluating GPT-2 model on test set...")
         test_results = trainer.evaluate(test_hf)
-        logger.info(f"Test results: {test_results}")
+        logger.info(f"GPT-2 test results: {test_results}")
         
         # Log final metrics only on main process
         if local_rank == 0:
             wandb.log(test_results)
         
     except Exception as e:
-        logger.error(f"Error training model {model_name}: {str(e)}")
+        logger.error(f"Error training GPT-2 model {model_name}: {str(e)}")
         raise
     finally:
         if local_rank == 0:
             wandb.finish()
 
 def main():
-    """Main function to train shadow models."""
+    """Main function to train GPT-2 shadow models."""
     import argparse
     import pandas as pd
     
     # Set up argument parser
-    parser = argparse.ArgumentParser(description='Train shadow models')
+    parser = argparse.ArgumentParser(description='Train GPT-2 shadow models')
     parser.add_argument('--model_indices', type=str, nargs='+', 
-                      help='Indices of models to train. Can be individual indices (e.g., 1 2 3) or ranges (e.g., 0-9).')
+                      help='Indices of GPT-2 models to train. Can be individual indices (e.g., 1 2 3) or ranges (e.g., 0-9).')
     args = parser.parse_args()
     
     # Read config summary CSV
@@ -379,8 +354,15 @@ def main():
     if not os.path.exists(config_summary_path):
         raise FileNotFoundError(f"Config summary file not found at {config_summary_path}")
     
-    # Read CSV file
+    # Read CSV file and filter for GPT-2 models only
     config_df = pd.read_csv(config_summary_path)
+    gpt2_df = config_df[config_df['model_family'] == 'GPT-2'].copy()
+    
+    if len(gpt2_df) == 0:
+        logger.warning("No GPT-2 models found in the configuration summary.")
+        return
+    
+    logger.info(f"Found {len(gpt2_df)} GPT-2 models in configuration")
     
     # If model indices are provided, filter the dataframe
     if args.model_indices:
@@ -399,25 +381,29 @@ def main():
                 except ValueError:
                     logger.warning(f"Invalid index: {idx_str}. Skipping...")
         
+        # Filter for GPT-2 models that match the selected indices
+        gpt2_df = gpt2_df[gpt2_df['model_index'].isin(selected_indices)]
+        
         invalid_indices = [idx for idx in selected_indices if idx not in config_df['model_index'].values]
         if invalid_indices:
             logger.warning(f"Invalid model indices: {invalid_indices}. These will be skipped.")
         
-        config_df = config_df[config_df['model_index'].isin(selected_indices)]
-        logger.info(f"Processing {len(config_df)} specified models")
+        logger.info(f"Processing {len(gpt2_df)} specified GPT-2 models")
     
-    logger.info(f"Training {len(config_df)} shadow models")
+    logger.info(f"Training {len(gpt2_df)} GPT-2 shadow models")
     
-    # Train models
-    for _, row in config_df.iterrows():
+    # Train GPT-2 models
+    for _, row in gpt2_df.iterrows():
         config_path = row['config_path']
         model_index = row['model_index']
-        logger.info(f"\nProcessing model index {model_index}: {config_path}")
+        model_name = row['model_name']
+        logger.info(f"\nProcessing GPT-2 model index {model_index}: {model_name}")
+        logger.info(f"Config path: {config_path}")
         try:
-            train_model(config_path, model_index)
+            train_gpt2_model(config_path, model_index)
         except Exception as e:
-            logger.error(f"Failed to train model with config {config_path}: {str(e)}")
+            logger.error(f"Failed to train GPT-2 model with config {config_path}: {str(e)}")
             continue
 
 if __name__ == "__main__":
-    main() 
+    main()

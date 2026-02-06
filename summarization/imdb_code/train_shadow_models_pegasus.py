@@ -2,8 +2,11 @@
 # -*- coding: utf-8 -*-
 
 """
-Script to train shadow models using generated YAML configurations.
-Trains multiple models with different hyperparameter combinations.
+Script to train Pegasus shadow models using generated YAML configurations.
+Specialized for Pegasus models with specific configurations:
+- max_source_length = 512
+- fp16 = False
+- bf16 = True
 """
 
 import os
@@ -18,10 +21,7 @@ from typing import Dict, Any, Optional
 from datetime import timedelta
 import time
 from transformers import (
-    BartTokenizer, BartForConditionalGeneration,
     PegasusTokenizer, PegasusForConditionalGeneration,
-    GPT2Tokenizer, GPT2LMHeadModel,
-    AutoTokenizer, AutoModelForCausalLM,
     Trainer,
     Seq2SeqTrainingArguments,
     DataCollatorForSeq2Seq,
@@ -68,7 +68,7 @@ def set_seed(seed: int = 42) -> None:
 class SummarizationDataset:
     """Dataset class for handling summarization data."""
     
-    def __init__(self, file_path: str, tokenizer, max_source_length: int = 1024, max_target_length: int = 128):
+    def __init__(self, file_path: str, tokenizer, max_source_length: int = 512, max_target_length: int = 128):
         self.tokenizer = tokenizer
         self.max_source_length = max_source_length
         self.max_target_length = max_target_length
@@ -144,51 +144,22 @@ class SummarizationDataset:
         
         return processed_dataset
 
-def get_model_and_tokenizer(config: Dict[str, Any]):
-    """Get appropriate model and tokenizer based on configuration."""
+def get_pegasus_model_and_tokenizer(config: Dict[str, Any]):
+    """Get Pegasus model and tokenizer based on configuration."""
     model_name = config['model']['name']
-    model_type = config['model']['type']
     
-    if model_type == 'encoder-decoder':
-        if 'bart' in model_name.lower():
-            tokenizer = BartTokenizer.from_pretrained(
-                model_name,
-                cache_dir=os.environ['TRANSFORMERS_CACHE']
-            )
-            model = BartForConditionalGeneration.from_pretrained(
-                model_name,
-                cache_dir=os.environ['TRANSFORMERS_CACHE']
-            )
-        elif 'pegasus' in model_name.lower():
-            tokenizer = PegasusTokenizer.from_pretrained(
-                model_name,
-                cache_dir=os.environ['TRANSFORMERS_CACHE']
-            )
-            model = PegasusForConditionalGeneration.from_pretrained(
-                model_name,
-                cache_dir=os.environ['TRANSFORMERS_CACHE']
-            )
-        else:
-            raise ValueError(f"Unsupported encoder-decoder model: {model_name}")
-    else:  # decoder-only
-        if 'gpt2' in model_name.lower():
-            tokenizer = GPT2Tokenizer.from_pretrained(
-                model_name,
-                cache_dir=os.environ['TRANSFORMERS_CACHE']
-            )
-            model = GPT2LMHeadModel.from_pretrained(
-                model_name,
-                cache_dir=os.environ['TRANSFORMERS_CACHE']
-            )
-        else:
-            tokenizer = AutoTokenizer.from_pretrained(
-                model_name,
-                cache_dir=os.environ['TRANSFORMERS_CACHE']
-            )
-            model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                cache_dir=os.environ['TRANSFORMERS_CACHE']
-            )
+    # Validate that this is a Pegasus model
+    if 'pegasus' not in model_name.lower():
+        raise ValueError(f"Expected Pegasus model, but got: {model_name}")
+    
+    tokenizer = PegasusTokenizer.from_pretrained(
+        model_name,
+        cache_dir=os.environ['TRANSFORMERS_CACHE']
+    )
+    model = PegasusForConditionalGeneration.from_pretrained(
+        model_name,
+        cache_dir=os.environ['TRANSFORMERS_CACHE']
+    )
     
     return model, tokenizer
 
@@ -223,14 +194,18 @@ def calculate_gradient_accumulation_steps(per_device_batch_size: int, target_eff
     
     return gradient_accumulation_steps
 
-def train_model(config_path: str, model_index: int) -> None:
-    """Train a model using the specified configuration."""
+def train_pegasus_model(config_path: str, model_index: int) -> None:
+    """Train a Pegasus model using the specified configuration."""
     # Get local rank for distributed training
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     
     # Load configuration
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
+    
+    # Validate that this is a Pegasus configuration
+    if config['model']['family'] != 'Pegasus':
+        raise ValueError(f"Expected Pegasus model configuration, but got: {config['model']['family']}")
     
     # Set up logging
     model_name = config['model']['name']
@@ -241,14 +216,14 @@ def train_model(config_path: str, model_index: int) -> None:
         logger.info(f"Model already exists at {output_dir}/final_model. Skipping training.")
         return
     
-    logger.info(f"\nTraining model: {model_name}")
+    logger.info(f"\nTraining Pegasus model: {model_name}")
     logger.info(f"Configuration: {config['training']}")
     
     # Initialize wandb only on main process
     if local_rank == 0:
         wandb.init(
-            project="shadow-model-training-30-imdb",
-            name=f"model_{model_index}_{config['model']['family']}_{config['model']['size']}_{config['training']['optimizer']}_lr{config['training']['learning_rate']}_bs{config['training']['batch_size']}",
+            project="pegasus-shadow-model-training",
+            name=f"pegasus_{model_index}_{config['model']['size']}_{config['training']['optimizer']}_lr{config['training']['learning_rate']}_bs{config['training']['batch_size']}",
             config=config
         )
     
@@ -256,20 +231,20 @@ def train_model(config_path: str, model_index: int) -> None:
         # Set random seed
         set_seed(42)
         
-        # Get model and tokenizer
-        model, tokenizer = get_model_and_tokenizer(config)
+        # Get Pegasus model and tokenizer
+        model, tokenizer = get_pegasus_model_and_tokenizer(config)
         
-        # Load datasets with cache directory
+        # Load datasets with Pegasus-specific configurations
         train_dataset = SummarizationDataset(
             config['data']['train_file'],
             tokenizer,
-            config['data']['max_source_length'],
+            config['data']['max_source_length'],  # Should be 512 for Pegasus
             config['data']['max_target_length']
         )
         test_dataset = SummarizationDataset(
             config['data']['test_file'],
             tokenizer,
-            config['data']['max_source_length'],
+            config['data']['max_source_length'],  # Should be 512 for Pegasus
             config['data']['max_target_length']
         )
         
@@ -285,10 +260,10 @@ def train_model(config_path: str, model_index: int) -> None:
             per_device_batch_size=config['training']['batch_size']
         )
         
-        # Configure training arguments
+        # Configure training arguments with Pegasus-specific settings
         training_args = Seq2SeqTrainingArguments(
             output_dir=config['output']['output_dir'],
-            num_train_epochs=int(config['training']['num_train_epochs']),  # Ensure it's an integer
+            num_train_epochs=int(config['training']['num_train_epochs']),
             per_device_train_batch_size=config['training']['batch_size'],
             per_device_eval_batch_size=config['training']['batch_size'],
             warmup_steps=config['training']['warmup_steps'],
@@ -297,22 +272,23 @@ def train_model(config_path: str, model_index: int) -> None:
             logging_steps=config['training']['logging_steps'],
             eval_steps=config['training']['eval_steps'],
             save_steps=config['training']['save_steps'],
-            gradient_accumulation_steps=gradient_accumulation_steps,  # Use calculated value
-            fp16=config['training']['fp16'],
-            report_to="wandb" if local_rank == 0 else "none",  # Only report to wandb on main process
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            fp16=config['training']['fp16'],  # Should be False for Pegasus
+            bf16=config['training'].get('bf16', True),  # Should be True for Pegasus
+            report_to="wandb" if local_rank == 0 else "none",
             generation_max_length=config['training']['generation_max_length'],
             predict_with_generate=True,
             generation_num_beams=config['training']['generation_num_beams'],
             learning_rate=config['training']['learning_rate'],
             lr_scheduler_type=config['training'].get('lr_scheduler_type', 'linear'),
-            max_steps=-1,  # Ensure we use num_train_epochs instead of max_steps
-            save_total_limit=2,  # Keep only the last 2 checkpoints
-            load_best_model_at_end=True,  # Load the best model at the end of training
-            metric_for_best_model="eval_loss",  # Use eval_loss to determine the best model
-            greater_is_better=False,  # Lower eval_loss is better
-            evaluation_strategy="steps",  # Match the save strategy
-            save_strategy="steps",  # Explicitly set save strategy
-            eval_accumulation_steps=1  # Accumulate evaluation results
+            max_steps=-1,
+            save_total_limit=2,
+            load_best_model_at_end=True,
+            metric_for_best_model="eval_loss",
+            greater_is_better=False,
+            evaluation_strategy="steps",
+            save_strategy="steps",
+            eval_accumulation_steps=1
         )
         
         # Initialize data collator
@@ -335,43 +311,43 @@ def train_model(config_path: str, model_index: int) -> None:
         
         # Train model
         start_time = time.time()
-        logger.info("Starting training...")
+        logger.info("Starting Pegasus training...")
         
         trainer.train()
         
         # Calculate and log training duration
         end_time = time.time()
         training_duration = timedelta(seconds=int(end_time - start_time))
-        logger.info(f"Training completed in {training_duration}")
+        logger.info(f"Pegasus training completed in {training_duration}")
         
         # Save model
         trainer.save_model(os.path.join(config['output']['output_dir'], "final_model"))
         
         # Evaluate on test set
-        logger.info("Evaluating on test set...")
+        logger.info("Evaluating Pegasus model on test set...")
         test_results = trainer.evaluate(test_hf)
-        logger.info(f"Test results: {test_results}")
+        logger.info(f"Pegasus test results: {test_results}")
         
         # Log final metrics only on main process
         if local_rank == 0:
             wandb.log(test_results)
         
     except Exception as e:
-        logger.error(f"Error training model {model_name}: {str(e)}")
+        logger.error(f"Error training Pegasus model {model_name}: {str(e)}")
         raise
     finally:
         if local_rank == 0:
             wandb.finish()
 
 def main():
-    """Main function to train shadow models."""
+    """Main function to train Pegasus shadow models."""
     import argparse
     import pandas as pd
     
     # Set up argument parser
-    parser = argparse.ArgumentParser(description='Train shadow models')
+    parser = argparse.ArgumentParser(description='Train Pegasus shadow models')
     parser.add_argument('--model_indices', type=str, nargs='+', 
-                      help='Indices of models to train. Can be individual indices (e.g., 1 2 3) or ranges (e.g., 0-9).')
+                      help='Indices of Pegasus models to train. Can be individual indices (e.g., 1 2 3) or ranges (e.g., 0-9).')
     args = parser.parse_args()
     
     # Read config summary CSV
@@ -379,8 +355,15 @@ def main():
     if not os.path.exists(config_summary_path):
         raise FileNotFoundError(f"Config summary file not found at {config_summary_path}")
     
-    # Read CSV file
+    # Read CSV file and filter for Pegasus models only
     config_df = pd.read_csv(config_summary_path)
+    pegasus_df = config_df[config_df['model_family'] == 'Pegasus'].copy()
+    
+    if len(pegasus_df) == 0:
+        logger.warning("No Pegasus models found in the configuration summary.")
+        return
+    
+    logger.info(f"Found {len(pegasus_df)} Pegasus models in configuration")
     
     # If model indices are provided, filter the dataframe
     if args.model_indices:
@@ -399,24 +382,28 @@ def main():
                 except ValueError:
                     logger.warning(f"Invalid index: {idx_str}. Skipping...")
         
+        # Filter for Pegasus models that match the selected indices
+        pegasus_df = pegasus_df[pegasus_df['model_index'].isin(selected_indices)]
+        
         invalid_indices = [idx for idx in selected_indices if idx not in config_df['model_index'].values]
         if invalid_indices:
             logger.warning(f"Invalid model indices: {invalid_indices}. These will be skipped.")
         
-        config_df = config_df[config_df['model_index'].isin(selected_indices)]
-        logger.info(f"Processing {len(config_df)} specified models")
+        logger.info(f"Processing {len(pegasus_df)} specified Pegasus models")
     
-    logger.info(f"Training {len(config_df)} shadow models")
+    logger.info(f"Training {len(pegasus_df)} Pegasus shadow models")
     
-    # Train models
-    for _, row in config_df.iterrows():
+    # Train Pegasus models
+    for _, row in pegasus_df.iterrows():
         config_path = row['config_path']
         model_index = row['model_index']
-        logger.info(f"\nProcessing model index {model_index}: {config_path}")
+        model_name = row['model_name']
+        logger.info(f"\nProcessing Pegasus model index {model_index}: {model_name}")
+        logger.info(f"Config path: {config_path}")
         try:
-            train_model(config_path, model_index)
+            train_pegasus_model(config_path, model_index)
         except Exception as e:
-            logger.error(f"Failed to train model with config {config_path}: {str(e)}")
+            logger.error(f"Failed to train Pegasus model with config {config_path}: {str(e)}")
             continue
 
 if __name__ == "__main__":

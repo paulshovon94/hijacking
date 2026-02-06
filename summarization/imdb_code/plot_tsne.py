@@ -63,9 +63,14 @@ def main():
     print("Reading dataset...")
     df = pd.read_csv('../transformed_data/imdb/test.csv')
     
+    # Randomly sample 100 data points for visualization
+    print("Randomly sampling 100 data points for visualization...")
+    sample_size = min(100, len(df))
+    df_sample = df.sample(n=sample_size, random_state=RANDOM_STATE)
+    
     # Get original and transformed texts
-    pseudo_dataset = df['pseudo_dataset'].astype(str).tolist()
-    transformed_texts = df['transformed_data'].astype(str).tolist()
+    pseudo_dataset = df_sample['pseudo_dataset'].astype(str).tolist()
+    transformed_texts = df_sample['transformed_data'].astype(str).tolist()
     
     # Generate embeddings
     print("\nGenerating embeddings for original texts...")
@@ -152,9 +157,13 @@ def main():
     
     # Adjust layout and save
     plt.tight_layout()
-    plt.savefig('tsne_visualization.png', dpi=300, bbox_inches='tight')
+    
+    # Save in both PNG and SVG formats
+    plt.savefig('tsne_visualization.png', dpi=600, bbox_inches='tight')
+    plt.savefig('tsne_visualization.svg', bbox_inches='tight')
+    
     plt.show()
-    print("\nPlot saved as 'tsne_visualization.png'")
+    print("\nPlot saved as 'tsne_visualization.png' and 'tsne_visualization.svg'")
 
 if __name__ == "__main__":
     main()
