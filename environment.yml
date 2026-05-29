@@ -1,4 +1,4 @@
-name: hijacking2
+name: hijacking3
 channels:
   - conda-forge
 dependencies:
@@ -149,4 +149,4 @@ dependencies:
       - xxhash==3.5.0
       - yarl==1.15.2
       - zipp==3.20.2
-prefix: /work/shovon/.conda/envs/hijacking2
+prefix: /work/shovon/.conda/envs/hijacking3

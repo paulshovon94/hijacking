@@ -67,3 +67,5 @@ summarization/imdb_code/tsne/
 .DS_Store
 Thumbs.db.DS_Store
 *.yaml
+.hf_cache/
+.tmp_pkgs/
