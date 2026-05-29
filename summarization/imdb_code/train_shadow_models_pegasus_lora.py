@@ -2,22 +2,9 @@
 # -*- coding: utf-8 -*-
 
 """
-Train BART / Pegasus shadow models with LoRA from YAML configs produced by
-`generate_configs_lora.py`.
+Train Pegasus-only LoRA shadow models using YAML configs from generate_configs_lora.py.
 
-Expected YAML shape (training section includes flat LoRA keys):
-  training:
-    use_lora: true
-    lora_r: 4
-    lora_alpha: 8
-    lora_dropout: 0.05
-    learning_rate: ...
-    batch_size: ...
-    bf16: true
-    fp16: false
-    ...
-
-Defaults to ./configs_lora/config_summary.csv (override with --config_summary).
+This is a standalone trainer (no imports from train_shadow_models_lora.py).
 """
 
 import argparse
@@ -29,7 +16,7 @@ import os
 import random
 import time
 from datetime import timedelta
-from typing import Any, Dict
+from typing import Any, Dict, List, Set
 
 import numpy as np
 import pandas as pd
@@ -39,14 +26,13 @@ import yaml
 from datasets import Dataset as HFDataset, load_from_disk
 from peft import LoraConfig, TaskType, get_peft_model
 from transformers import (
-    BartForConditionalGeneration,
-    BartTokenizer,
     DataCollatorForSeq2Seq,
     PegasusForConditionalGeneration,
     PegasusTokenizer,
     Seq2SeqTrainingArguments,
     Trainer,
 )
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,6 +58,7 @@ NUM_PROC = min(16, CPU_COUNT)
 logger.info("Using %s processes for dataset processing", NUM_PROC)
 
 MIN_EVAL_STEPS = 2000
+TARGET_FAMILY = "Pegasus"
 
 
 def set_seed(seed: int = 42) -> None:
@@ -94,7 +81,6 @@ def _lora_run_already_done(output_dir: str) -> bool:
 
 
 def _normalize_lora_from_config(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Support flat `training.lora_*` (generate_configs_lora) or nested `lora` dict."""
     training = config.get("training", {})
     nested = config.get("lora")
     if nested:
@@ -117,13 +103,13 @@ def _normalize_lora_from_config(config: Dict[str, Any]) -> Dict[str, Any]:
 
 
 class SummarizationDataset:
-    """Dataset class for handling summarization data (same as train_shadow_models.py)."""
+    """Dataset class for Pegasus summarization."""
 
     def __init__(
         self,
         file_path: str,
         tokenizer,
-        max_source_length: int = 1024,
+        max_source_length: int = 512,
         max_target_length: int = 128,
     ):
         self.tokenizer = tokenizer
@@ -162,7 +148,9 @@ class SummarizationDataset:
         os.makedirs(cache_dir, exist_ok=True)
         tokenizer_name = self.tokenizer.name_or_path
         file_hash = hash(self.file_path)
-        cache_key = f"{tokenizer_name}_{file_hash}_{self.max_source_length}_{self.max_target_length}"
+        cache_key = (
+            f"{tokenizer_name}_{file_hash}_{self.max_source_length}_{self.max_target_length}"
+        )
         cache_path = os.path.join(cache_dir, f"{cache_key}.hf")
 
         if os.path.exists(cache_path):
@@ -186,32 +174,25 @@ class SummarizationDataset:
 
 
 def get_model_and_tokenizer(config: Dict[str, Any]):
-    """Load base model and tokenizer (float32 weights; Trainer applies bf16/fp16)."""
     model_name = config["model"]["name"]
     model_type = config["model"].get("type", "")
+    model_family = config["model"].get("family", "")
+
     if model_type != "encoder-decoder":
         raise ValueError(
-            f"train_shadow_models_lora.py supports only encoder-decoder models, got: {model_type}"
+            f"Pegasus LoRA trainer supports encoder-decoder only, got: {model_type}"
+        )
+    if model_family != TARGET_FAMILY and "pegasus" not in model_name.lower():
+        raise ValueError(
+            f"Pegasus LoRA trainer supports Pegasus only, got family={model_family}, model={model_name}"
         )
 
-    if "bart" in model_name.lower():
-        tokenizer = BartTokenizer.from_pretrained(
-            model_name, cache_dir=os.environ["TRANSFORMERS_CACHE"]
-        )
-        model = BartForConditionalGeneration.from_pretrained(
-            model_name, cache_dir=os.environ["TRANSFORMERS_CACHE"]
-        )
-    elif "pegasus" in model_name.lower():
-        tokenizer = PegasusTokenizer.from_pretrained(
-            model_name, cache_dir=os.environ["TRANSFORMERS_CACHE"]
-        )
-        model = PegasusForConditionalGeneration.from_pretrained(
-            model_name, cache_dir=os.environ["TRANSFORMERS_CACHE"]
-        )
-    else:
-        raise ValueError(
-            f"Unsupported model for this LoRA trainer: {model_name}. Expected BART or Pegasus."
-        )
+    tokenizer = PegasusTokenizer.from_pretrained(
+        model_name, cache_dir=os.environ["TRANSFORMERS_CACHE"]
+    )
+    model = PegasusForConditionalGeneration.from_pretrained(
+        model_name, cache_dir=os.environ["TRANSFORMERS_CACHE"]
+    )
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -219,18 +200,17 @@ def get_model_and_tokenizer(config: Dict[str, Any]):
     return model, tokenizer
 
 
-def default_lora_target_modules() -> list:
+def default_lora_target_modules() -> List[str]:
     return ["q_proj", "v_proj"]
 
 
-def build_lora_config(config: Dict[str, Any], lora_params: Dict[str, Any]) -> LoraConfig:
-    task_type = TaskType.SEQ_2_SEQ_LM
+def build_lora_config(lora_params: Dict[str, Any]) -> LoraConfig:
     target_modules = default_lora_target_modules()
-    requested_target_modules = lora_params.get("target_modules")
-    if requested_target_modules and requested_target_modules != target_modules:
+    requested = lora_params.get("target_modules")
+    if requested and requested != target_modules:
         logger.warning(
             "Ignoring requested target_modules=%s; enforcing target_modules=%s",
-            requested_target_modules,
+            requested,
             target_modules,
         )
     return LoraConfig(
@@ -239,7 +219,7 @@ def build_lora_config(config: Dict[str, Any], lora_params: Dict[str, Any]) -> Lo
         target_modules=target_modules,
         lora_dropout=lora_params["lora_dropout"],
         bias=lora_params["bias"],
-        task_type=task_type,
+        task_type=TaskType.SEQ_2_SEQ_LM,
     )
 
 
@@ -247,9 +227,7 @@ def calculate_gradient_accumulation_steps(
     per_device_batch_size: int, target_effective_batch_size: int = 64
 ) -> int:
     num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
-    steps = max(
-        1, target_effective_batch_size // (per_device_batch_size * num_gpus)
-    )
+    steps = max(1, target_effective_batch_size // (per_device_batch_size * num_gpus))
     logger.info(
         "Gradient accumulation: per_device_bs=%s gpus=%s -> steps=%s (effective %s)",
         per_device_batch_size,
@@ -263,8 +241,13 @@ def calculate_gradient_accumulation_steps(
 def train_model(config_path: str, model_index: int) -> None:
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
 
-    with open(config_path, "r") as f:
+    with open(config_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
+
+    if config.get("model", {}).get("family") != TARGET_FAMILY:
+        raise ValueError(
+            f"Config {config_path} is not Pegasus family: {config.get('model', {}).get('family')}"
+        )
 
     training = config["training"]
     use_lora = bool(training.get("use_lora", True))
@@ -274,53 +257,50 @@ def train_model(config_path: str, model_index: int) -> None:
     output_dir = _resolve_path(config["output"]["output_dir"])
 
     if _lora_run_already_done(output_dir):
-        logger.info(
-            "LoRA adapters already present under %s. Skipping training.", output_dir
-        )
+        logger.info("LoRA adapters already present under %s. Skipping training.", output_dir)
         return
 
-    logger.info("Training (LoRA=%s): %s", use_lora, model_name)
+    logger.info("Training Pegasus (LoRA=%s): %s", use_lora, model_name)
     logger.info("Training hyperparameters: %s", training)
     if use_lora:
         logger.info("LoRA hyperparameters: %s", lora_params)
 
     wandb_name = (
-        f"lora_{model_index}_{config['model']['family']}_{config['model']['size']}_"
+        f"pegasus_lora_{model_index}_{config['model']['size']}_"
         f"{training['optimizer']}_lr{training['learning_rate']}_bs{training['batch_size']}"
     )
     if use_lora:
         wandb_name += (
-            f"_r{lora_params['r']}_a{lora_params['lora_alpha']}"
-            f"_d{lora_params['lora_dropout']}"
+            f"_r{lora_params['r']}_a{lora_params['lora_alpha']}_d{lora_params['lora_dropout']}"
         )
 
     if local_rank == 0:
         wandb.init(
-            project="shadow-model-training-lora-imdb",
+            project="shadow-model-training-pegasus-lora-imdb",
             name=wandb_name,
             config=config,
         )
 
     try:
         set_seed(42)
-
         model, tokenizer = get_model_and_tokenizer(config)
+
         if use_lora:
-            lora_cfg = build_lora_config(config, lora_params)
+            lora_cfg = build_lora_config(lora_params)
             model = get_peft_model(model, lora_cfg)
             model.print_trainable_parameters()
 
         train_dataset = SummarizationDataset(
             config["data"]["train_file"],
             tokenizer,
-            config["data"]["max_source_length"],
-            config["data"]["max_target_length"],
+            int(config["data"]["max_source_length"]),
+            int(config["data"]["max_target_length"]),
         )
         test_dataset = SummarizationDataset(
             config["data"]["test_file"],
             tokenizer,
-            config["data"]["max_source_length"],
-            config["data"]["max_target_length"],
+            int(config["data"]["max_source_length"]),
+            int(config["data"]["max_target_length"]),
         )
 
         train_hf = train_dataset.create_dataset()
@@ -331,7 +311,7 @@ def train_model(config_path: str, model_index: int) -> None:
             gradient_accumulation_steps = int(training["gradient_accumulation_steps"])
         else:
             gradient_accumulation_steps = calculate_gradient_accumulation_steps(
-                per_device_batch_size=training["batch_size"]
+                per_device_batch_size=int(training["batch_size"])
             )
 
         use_bf16 = bool(training.get("bf16", False))
@@ -343,70 +323,49 @@ def train_model(config_path: str, model_index: int) -> None:
         else:
             bf16, fp16 = False, False
             if use_bf16 or use_fp16:
-                logger.warning(
-                    "Requested bf16/fp16 not available; training in float32."
-                )
+                logger.warning("Requested bf16/fp16 not available; training in float32.")
 
-        eval_steps = max(int(training.get("eval_steps", MIN_EVAL_STEPS)), MIN_EVAL_STEPS)
-        save_steps = int(training.get("save_steps", eval_steps))
-        if save_steps % eval_steps != 0:
-            adjusted_save_steps = ((save_steps + eval_steps - 1) // eval_steps) * eval_steps
-            logger.warning(
-                "Adjusted save_steps from %s to %s to satisfy load_best_model_at_end "
-                "(save_steps must be a multiple of eval_steps=%s).",
-                save_steps,
-                adjusted_save_steps,
-                eval_steps,
-            )
-            save_steps = adjusted_save_steps
+        save_steps = int(training.get("save_steps", 1000))
 
         training_args_kwargs: Dict[str, Any] = {
             "output_dir": output_dir,
             "num_train_epochs": int(training["num_train_epochs"]),
-            "per_device_train_batch_size": training["batch_size"],
-            "per_device_eval_batch_size": training["batch_size"],
-            "warmup_steps": training["warmup_steps"],
-            "weight_decay": training["weight_decay"],
+            "per_device_train_batch_size": int(training["batch_size"]),
+            "per_device_eval_batch_size": int(training["batch_size"]),
+            "warmup_steps": int(training["warmup_steps"]),
+            "weight_decay": float(training["weight_decay"]),
             "logging_dir": _resolve_path(config["output"]["logging_dir"]),
-            "logging_steps": training["logging_steps"],
-            "eval_steps": eval_steps,
+            "logging_steps": int(training["logging_steps"]),
             "save_steps": save_steps,
             "gradient_accumulation_steps": gradient_accumulation_steps,
             "fp16": fp16,
             "bf16": bf16,
             "report_to": "wandb" if local_rank == 0 else "none",
-            "generation_max_length": training["generation_max_length"],
+            "generation_max_length": int(training["generation_max_length"]),
             "predict_with_generate": True,
-            "generation_num_beams": training["generation_num_beams"],
-            "learning_rate": training["learning_rate"],
+            "generation_num_beams": int(training["generation_num_beams"]),
+            "learning_rate": float(training["learning_rate"]),
             "lr_scheduler_type": training.get("lr_scheduler_type", "linear"),
             "max_steps": -1,
             "save_total_limit": 2,
-            "load_best_model_at_end": True,
-            "metric_for_best_model": "eval_loss",
-            "greater_is_better": False,
+            "load_best_model_at_end": False,
             "save_strategy": "steps",
             "eval_accumulation_steps": 1,
             "remove_unused_columns": False,
+            "ddp_find_unused_parameters": False,
         }
 
         seq2seq_params = inspect.signature(Seq2SeqTrainingArguments.__init__).parameters
-        # Prefer eval_strategy to avoid deprecation warning on newer transformers.
         if "eval_strategy" in seq2seq_params:
-            training_args_kwargs["eval_strategy"] = training.get(
-                "evaluation_strategy", "steps"
-            )
+            training_args_kwargs["eval_strategy"] = "no"
         elif "evaluation_strategy" in seq2seq_params:
-            training_args_kwargs["evaluation_strategy"] = training.get(
-                "evaluation_strategy", "steps"
-            )
+            training_args_kwargs["evaluation_strategy"] = "no"
         else:
             logger.warning(
                 "Seq2SeqTrainingArguments has no evaluation_strategy/eval_strategy."
             )
 
         training_args = Seq2SeqTrainingArguments(**training_args_kwargs)
-
         data_collator = DataCollatorForSeq2Seq(
             tokenizer, model=model, padding=True, return_tensors="pt"
         )
@@ -427,11 +386,10 @@ def train_model(config_path: str, model_index: int) -> None:
         trainer = Trainer(**trainer_kwargs)
 
         start_time = time.time()
-        logger.info("Starting training...")
+        logger.info("Starting Pegasus LoRA training...")
         trainer.train()
         logger.info(
-            "Training completed in %s",
-            timedelta(seconds=int(time.time() - start_time)),
+            "Training completed in %s", timedelta(seconds=int(time.time() - start_time))
         )
 
         final_dir = os.path.join(output_dir, "final_model")
@@ -447,16 +405,33 @@ def train_model(config_path: str, model_index: int) -> None:
         if local_rank == 0:
             wandb.log(test_results)
 
-    except Exception as e:
-        logger.error("Error training model %s: %s", model_name, e)
+    except Exception as exc:
+        logger.error("Error training Pegasus model %s: %s", model_name, exc)
         raise
     finally:
         if local_rank == 0:
             wandb.finish()
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Train BART/Pegasus shadow models with LoRA")
+def parse_model_indices(model_indices_args: List[str]) -> Set[int]:
+    selected_indices: Set[int] = set()
+    for idx_str in model_indices_args:
+        if "-" in idx_str:
+            try:
+                start, end = map(int, idx_str.split("-"))
+                selected_indices.update(range(start, end + 1))
+            except ValueError:
+                logger.warning("Invalid range format: %s. Skipping...", idx_str)
+        else:
+            try:
+                selected_indices.add(int(idx_str))
+            except ValueError:
+                logger.warning("Invalid index: %s. Skipping...", idx_str)
+    return selected_indices
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Train Pegasus-only LoRA shadow models")
     parser.add_argument(
         "--model_indices",
         type=str,
@@ -471,42 +446,41 @@ def main():
     )
     args = parser.parse_args()
 
-    config_summary_path = os.path.normpath(
-        os.path.join(os.getcwd(), args.config_summary)
-    )
+    config_summary_path = _resolve_path(args.config_summary)
     if not os.path.exists(config_summary_path):
-        raise FileNotFoundError(
-            f"Config summary not found: {config_summary_path}"
-        )
+        raise FileNotFoundError(f"Config summary not found: {config_summary_path}")
 
     config_df = pd.read_csv(config_summary_path)
+    if "model_family" not in config_df.columns:
+        raise ValueError("config_summary CSV is missing 'model_family' column.")
+
+    config_df = config_df[config_df["model_family"] == TARGET_FAMILY]
+    if config_df.empty:
+        raise ValueError(
+            f"No {TARGET_FAMILY} rows found in config summary: {config_summary_path}"
+        )
 
     if args.model_indices:
-        selected = set()
-        for idx_str in args.model_indices:
-            if "-" in idx_str:
-                start, end = map(int, idx_str.split("-"))
-                selected.update(range(start, end + 1))
-            else:
-                selected.add(int(idx_str))
-        invalid = [i for i in selected if i not in config_df["model_index"].values]
+        selected = parse_model_indices(args.model_indices)
+        invalid = [idx for idx in selected if idx not in config_df["model_index"].values]
         if invalid:
-            logger.warning("Invalid model indices (skipped): %s", invalid)
+            logger.warning("Invalid/non-Pegasus model indices (skipped): %s", sorted(invalid))
         config_df = config_df[config_df["model_index"].isin(selected)]
-        logger.info("Processing %s specified models", len(config_df))
+        logger.info("Processing %s specified Pegasus models", len(config_df))
 
-    logger.info("Training %s models from %s", len(config_df), config_summary_path)
+    logger.info("Training %s Pegasus models from %s", len(config_df), config_summary_path)
 
     for _, row in config_df.iterrows():
         config_path = row["config_path"]
         if not os.path.isabs(config_path):
-            config_path = os.path.normpath(os.path.join(os.getcwd(), config_path))
+            config_path = _resolve_path(config_path)
+
         model_index = int(row["model_index"])
-        logger.info("Model index %s: %s", model_index, config_path)
+        logger.info("Model index %s (Pegasus): %s", model_index, config_path)
         try:
             train_model(config_path, model_index)
-        except Exception as e:
-            logger.error("Failed config %s: %s", config_path, e)
+        except Exception as exc:
+            logger.error("Failed Pegasus model index %s: %s", model_index, exc)
             continue
 
 

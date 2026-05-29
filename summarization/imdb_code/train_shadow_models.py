@@ -11,6 +11,7 @@ import yaml
 import json
 import torch
 import logging
+import inspect
 import wandb
 import multiprocessing
 from pathlib import Path
@@ -25,10 +26,10 @@ from transformers import (
     Trainer,
     Seq2SeqTrainingArguments,
     DataCollatorForSeq2Seq,
-    AdamW,
     Adafactor,
     get_scheduler
 )
+from torch.optim import AdamW
 from datasets import Dataset as HFDataset, load_from_disk
 import numpy as np
 import random
@@ -285,35 +286,47 @@ def train_model(config_path: str, model_index: int) -> None:
             per_device_batch_size=config['training']['batch_size']
         )
         
-        # Configure training arguments
-        training_args = Seq2SeqTrainingArguments(
-            output_dir=config['output']['output_dir'],
-            num_train_epochs=int(config['training']['num_train_epochs']),  # Ensure it's an integer
-            per_device_train_batch_size=config['training']['batch_size'],
-            per_device_eval_batch_size=config['training']['batch_size'],
-            warmup_steps=config['training']['warmup_steps'],
-            weight_decay=config['training']['weight_decay'],
-            logging_dir=config['output']['logging_dir'],
-            logging_steps=config['training']['logging_steps'],
-            eval_steps=config['training']['eval_steps'],
-            save_steps=config['training']['save_steps'],
-            gradient_accumulation_steps=gradient_accumulation_steps,  # Use calculated value
-            fp16=config['training']['fp16'],
-            report_to="wandb" if local_rank == 0 else "none",  # Only report to wandb on main process
-            generation_max_length=config['training']['generation_max_length'],
-            predict_with_generate=True,
-            generation_num_beams=config['training']['generation_num_beams'],
-            learning_rate=config['training']['learning_rate'],
-            lr_scheduler_type=config['training'].get('lr_scheduler_type', 'linear'),
-            max_steps=-1,  # Ensure we use num_train_epochs instead of max_steps
-            save_total_limit=2,  # Keep only the last 2 checkpoints
-            load_best_model_at_end=True,  # Load the best model at the end of training
-            metric_for_best_model="eval_loss",  # Use eval_loss to determine the best model
-            greater_is_better=False,  # Lower eval_loss is better
-            evaluation_strategy="steps",  # Match the save strategy
-            save_strategy="steps",  # Explicitly set save strategy
-            eval_accumulation_steps=1  # Accumulate evaluation results
-        )
+        # Configure training arguments with compatibility across transformers versions.
+        training_args_kwargs = {
+            "output_dir": config['output']['output_dir'],
+            "num_train_epochs": int(config['training']['num_train_epochs']),  # Ensure it's an integer
+            "per_device_train_batch_size": config['training']['batch_size'],
+            "per_device_eval_batch_size": config['training']['batch_size'],
+            "warmup_steps": config['training']['warmup_steps'],
+            "weight_decay": config['training']['weight_decay'],
+            "logging_dir": config['output']['logging_dir'],
+            "logging_steps": config['training']['logging_steps'],
+            "eval_steps": config['training']['eval_steps'],
+            "save_steps": config['training']['save_steps'],
+            "gradient_accumulation_steps": gradient_accumulation_steps,  # Use calculated value
+            "fp16": config['training']['fp16'],
+            "report_to": "wandb" if local_rank == 0 else "none",  # Only report to wandb on main process
+            "generation_max_length": config['training']['generation_max_length'],
+            "predict_with_generate": True,
+            "generation_num_beams": config['training']['generation_num_beams'],
+            "learning_rate": config['training']['learning_rate'],
+            "lr_scheduler_type": config['training'].get('lr_scheduler_type', 'linear'),
+            "max_steps": -1,  # Ensure we use num_train_epochs instead of max_steps
+            "save_total_limit": 2,  # Keep only the last 2 checkpoints
+            "load_best_model_at_end": True,  # Load the best model at the end of training
+            "metric_for_best_model": "eval_loss",  # Use eval_loss to determine the best model
+            "greater_is_better": False,  # Lower eval_loss is better
+            "save_strategy": "steps",  # Explicitly set save strategy
+            "eval_accumulation_steps": 1  # Accumulate evaluation results
+        }
+
+        seq2seq_init_params = inspect.signature(Seq2SeqTrainingArguments.__init__).parameters
+        if "evaluation_strategy" in seq2seq_init_params:
+            training_args_kwargs["evaluation_strategy"] = "steps"
+        elif "eval_strategy" in seq2seq_init_params:
+            training_args_kwargs["eval_strategy"] = "steps"
+        else:
+            logger.warning(
+                "Neither evaluation_strategy nor eval_strategy is supported by this transformers version; "
+                "falling back to default evaluation behavior."
+            )
+
+        training_args = Seq2SeqTrainingArguments(**training_args_kwargs)
         
         # Initialize data collator
         data_collator = DataCollatorForSeq2Seq(
@@ -323,15 +336,27 @@ def train_model(config_path: str, model_index: int) -> None:
             return_tensors="pt"
         )
         
-        # Initialize trainer
-        trainer = Trainer(
-            model=model,
-            args=training_args,
-            train_dataset=train_val_datasets["train"],
-            eval_dataset=train_val_datasets["test"],
-            data_collator=data_collator,
-            tokenizer=tokenizer,
-        )
+        # Initialize trainer with compatibility across transformers versions.
+        trainer_kwargs = {
+            "model": model,
+            "args": training_args,
+            "train_dataset": train_val_datasets["train"],
+            "eval_dataset": train_val_datasets["test"],
+            "data_collator": data_collator,
+        }
+
+        trainer_init_params = inspect.signature(Trainer.__init__).parameters
+        if "tokenizer" in trainer_init_params:
+            trainer_kwargs["tokenizer"] = tokenizer
+        elif "processing_class" in trainer_init_params:
+            trainer_kwargs["processing_class"] = tokenizer
+        else:
+            logger.warning(
+                "Neither tokenizer nor processing_class is supported by this transformers version; "
+                "continuing without explicit processor attachment."
+            )
+
+        trainer = Trainer(**trainer_kwargs)
         
         # Train model
         start_time = time.time()
