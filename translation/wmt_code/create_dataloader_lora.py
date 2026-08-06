@@ -1,5 +1,5 @@
 """
-Data Loader Creator for LoRA models across all six families.
+Data Loader Creator for LoRA models across the translation model zoo.
 
 This script scans the multimodal dataset directory and LoRA config summary CSV
 to build `dataloader/dataloader.csv` for downstream hyperparameter stealing.
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 class LoRADataLoaderCreator:
-    """Creates dataloader.csv for LoRA runs across all six model families."""
+    """Creates dataloader.csv for LoRA runs across all translation-capable families."""
 
     # Directory-name slug -> canonical family label used in the config summary.
     FAMILY_BY_SLUG = {
@@ -54,7 +54,7 @@ class LoRADataLoaderCreator:
         # gate results recorded in that file.
         self.model_family_mapping = ["Marian", "BART", "Qwen", "LLaMA"]
         self.model_size_mapping = [
-            "base", "big", "large", "0.5B", "1.5B", "1B", "3B", "7B", "8B",
+            "base", "large", "0.5B", "1.5B", "1B", "3B", "7B", "8B",
         ]
         self.lr_mapping = [1e-5, 5e-5, 1e-4]
         self.lora_r_mapping = [4, 8, 16]
@@ -295,7 +295,7 @@ class LoRADataLoaderCreator:
         expected = {
             "model_family_mapping": ["Marian", "BART", "Qwen", "LLaMA"],
             "model_size_mapping": [
-                "base", "big", "large", "0.5B", "1.5B", "1B", "3B", "7B", "8B",
+                "base", "large", "0.5B", "1.5B", "1B", "3B", "7B", "8B",
             ],
             "lr_mapping": [1e-5, 5e-5, 1e-4],
             "lora_r_mapping": [4, 8, 16],

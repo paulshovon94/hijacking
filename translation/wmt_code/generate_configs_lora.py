@@ -99,18 +99,15 @@ class ModelRegistry:
         # cannot perform the task would undercut the result, so they are gone. What
         # remains is models built for, or demonstrably good at, translation.
         return [
-            # Purpose-built De->En. Two sizes, and the strongest translators here.
+            # Purpose-built De->En, and by far the cheapest to train (~4 min/epoch on the
+            # gate budget vs ~28 for Qwen-7B). Only one checkpoint: Helsinki-NLP has no
+            # tc-big De->En model, and the alternatives (opus-mt-gem-en, tc-big-gmw-gmw)
+            # differ in language coverage rather than size, so labelling either as a
+            # second "size" would be inventing a distinction that does not exist.
             ModelConfig(
                 name="Helsinki-NLP/opus-mt-de-en",
                 model_type="encoder-decoder",
                 size="base",
-                family="Marian",
-                **common,
-            ),
-            ModelConfig(
-                name="Helsinki-NLP/opus-mt-tc-big-de-en",
-                model_type="encoder-decoder",
-                size="big",
                 family="Marian",
                 **common,
             ),
