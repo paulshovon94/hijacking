@@ -39,8 +39,13 @@ export WANDB_DIR=$CACHE_DIR/wandb
 mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$TRANSFORMERS_CACHE" "$TORCH_HOME" \
          "$PIP_CACHE_DIR" "$WANDB_DIR" /work/shovon/logs
 
+# QB4's /etc/bashrc references BASHRCSOURCED while unset, which kills the script
+# instantly under `set -u`. Relax nounset just for the sourcing and conda init.
+set +u
 source ~/.bashrc
 conda activate "$CONDA_ENV"
+set -u
+
 cd "$CODE_DIR"
 
 # Map this array task to a model_index and a trainer. Both are read from
