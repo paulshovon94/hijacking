@@ -111,7 +111,7 @@ class QwenLoraTextGenerator:
 
     @torch.no_grad()
     def generate_text(self, text: str, max_new_tokens: int = 128) -> str:
-        prompt = f"Text: {text} Summary:"
+        prompt = f"Text: {text}\nSummary:"
         max_prompt_len = max(1, self.max_ctx - max_new_tokens)
 
         enc = self.tokenizer(

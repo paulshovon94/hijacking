@@ -186,6 +186,14 @@ def apply_yaml_config(args: argparse.Namespace) -> argparse.Namespace:
     args.max_target_length = int(config["data"].get("max_target_length", 128))
     args.num_train_epochs = float(config["training"]["num_train_epochs"])
     args.learning_rate = float(config["training"]["learning_rate"])
+    # LoRA hyperparameters are three of the labels the attack classifier predicts, so
+    # they must come from the config -- hardcoding them made every config for this
+    # family train identically apart from learning rate. Fall back to the CLI defaults
+    # when the key is absent, since the non-LoRA configs in configs/ do not carry them.
+    training_cfg = config["training"]
+    args.lora_r = int(training_cfg.get("lora_r", args.lora_r))
+    args.lora_alpha = int(training_cfg.get("lora_alpha", args.lora_alpha))
+    args.lora_dropout = float(training_cfg.get("lora_dropout", args.lora_dropout))
     args.batch_size = int(config["training"]["batch_size"])
     args.gradient_accumulation_steps = int(config["training"]["gradient_accumulation_steps"])
     args.warmup_steps = int(config["training"]["warmup_steps"])
@@ -289,10 +297,14 @@ def train(args: argparse.Namespace) -> None:
     )
     model.config.pad_token_id = tokenizer.pad_token_id
 
+    logger.info(
+        "LoRA config: r=%s alpha=%s dropout=%s",
+        args.lora_r, args.lora_alpha, args.lora_dropout,
+    )
     lora_config = LoraConfig(
-        r=8,
-        lora_alpha=8,
-        lora_dropout=0.05,
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=args.lora_dropout,
         target_modules=["q_proj", "k_proj", "v_proj", "dense"],
         bias="none",
         task_type=TaskType.CAUSAL_LM,
@@ -370,6 +382,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output_dir", type=str, default="./results")
     parser.add_argument("--logging_dir", type=str, default="./results/logs")
     parser.add_argument("--max_source_length", type=int, default=512)
+    # Used when the YAML config does not carry LoRA keys (the configs/ set does not).
+    # alpha defaults to 8 here, matching what this script previously hardcoded.
+    parser.add_argument("--lora_r", type=int, default=8)
+    parser.add_argument("--lora_alpha", type=int, default=8)
+    parser.add_argument("--lora_dropout", type=float, default=0.05)
     parser.add_argument("--max_target_length", type=int, default=128)
     parser.add_argument("--num_train_epochs", type=float, default=3.0)
     parser.add_argument("--learning_rate", type=float, default=2e-4)
