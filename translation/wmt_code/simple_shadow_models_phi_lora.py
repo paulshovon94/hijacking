@@ -265,6 +265,7 @@ def train_from_model_indices(base_args: argparse.Namespace) -> None:
     if missing_indices:
         logger.warning("Indices not found for Phi-2 and will be skipped: %s", missing_indices)
 
+    failures = []
     for row in sorted(rows, key=lambda r: int(r["model_index"])):
         model_index = int(row["model_index"])
         config_path = os.path.normpath(row["config_path"])
@@ -278,7 +279,13 @@ def train_from_model_indices(base_args: argparse.Namespace) -> None:
             train(run_args)
         except Exception as exc:
             logger.error("Training failed for model_index=%s: %s", model_index, str(exc))
+            failures.append(model_index)
             continue
+
+    if failures:
+        # Exit non-zero so a SLURM array task that trained nothing is not reported as
+        # COMPLETED. Silent success is the worst outcome across a 540-run sweep.
+        raise SystemExit(f"Training failed for model_indices: {failures}")
 
 
 def train(args: argparse.Namespace) -> None:
