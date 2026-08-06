@@ -1,12 +1,12 @@
-# Translation-task replication (De→En)
+# Translation-task extension (De→En)
 
-Replicates the hyperparameter-stealing attack on **WMT16 De→En translation** to show the
-result is not specific to summarization.
+Shows the hyperparameter-stealing pipeline works on **WMT16 De→En translation**, not just
+summarization.
 
-The governing principle is **change the task, hold everything else fixed**: same covert
-sentiment task, same word-substitution attack, same seven feature modalities, same
-classifier, same LoRA grid. Any difference in per-head accuracy is then attributable to
-the task and nothing else.
+The claim is about the *pipeline*, so the shadow models only need to be capable
+translators — they deliberately do **not** mirror the summarization model zoo. The covert
+sentiment task, the word-substitution attack, the seven feature modalities, the
+classifier, and the LoRA grid are all unchanged; only the task and the models differ.
 
 ## Read this first: the column names lie, deliberately
 
@@ -119,19 +119,33 @@ torchrun --nproc-per-node=1 experiment_lora.py --seed 42
 `--model_indices` ranges map to families; `python sweep.py index <family> 0` prints the
 first index for any family rather than relying on the table above staying current.
 
-## The viability gate
+## The viability gate, and what it ruled out
 
-Three of the six families were pretrained on English only, and De→En is a real ask for
-them. **Pegasus is the likeliest failure** — its SentencePiece vocab is English-trained
-and `pegasus-xsum` is already specialized to summarization.
+The gate trains one short config per checkpoint (1 epoch on 20k pairs, lr 1e-4, r=8,
+alpha=16 — uniform across families) and scores BLEU/chrF on clean WMT16 test. It is cheap
+insurance before committing 54 runs per checkpoint.
 
-The gate trains one short config per checkpoint on a truncated dataset and scores BLEU on
-clean WMT16 test. Six cheap runs decide which families are worth 54 runs each.
+The first round tested the summarization zoo and ruled most of it out:
 
-Any family that cannot clear the quality threshold is **dropped and reported**, with the
-random baseline for the `model_family` head adjusted to the surviving class count.
-"The attack applies to models capable of the task" is a defensible scope statement; the
-alternative — stealing hyperparameters from models that cannot translate — is not.
+| Model | BLEU | chrF | Verdict |
+|---|---|---|---|
+| BART-large | 23.97 | 47.16 | kept |
+| Qwen2.5-7B | 23.47 | 59.15 | kept |
+| LLaMA-3.1-8B | 11.27 | 46.14 | kept |
+| BART-base | 5.22 | 22.44 | dropped |
+| Pegasus-xsum | 3.96 | 20.52 | dropped |
+| Phi-1.5 | 1.74 | 21.51 | dropped |
+| GPT-2 large / medium / small | 1.24 / 1.02 / 0.64 | ~15–19 | dropped |
+| Pegasus-large | 1.14 | 18.54 | dropped |
+
+GPT-2, Pegasus and Phi are English-only pretrained; byte-level BPE lets them *encode*
+German but they have no German competence to build on. Stealing hyperparameters from
+models that cannot perform the task would undercut the result, so they were replaced with
+models built for translation rather than rescued.
+
+The trainers and extractors for the dropped families are still in this directory
+(`*_gpt2_*`, `*_pegasus_*`, `*_phi_*`) so the gate result stays reproducible, but nothing
+in `sweep.py` references them.
 
 ## Labels
 
@@ -139,12 +153,22 @@ Six heads, matching `experiment_lora.py`: `model_family`, `model_size`, `learnin
 `lora_r`, `lora_alpha`, `lora_dropout`. Optimizer and batch size are fixed in the LoRA
 grid (`adamw`, 4), so they are not predicted.
 
-The ten checkpoints match `configs/config_summary.csv` exactly: BART base/large, Pegasus
-xsum/large, GPT-2 small/medium/large, Phi-1.5, LLaMA-3.1-8B, Qwen2.5-7B.
+Nine checkpoints across four families — **486 runs** (9 × 54):
 
-**Known confound, inherited deliberately:** Phi, LLaMA, and Qwen have one size each, so
-`model_size` is partly determined by `model_family`. The summarization experiment has the
-same property; "fixing" it here would break the comparison.
+| Family | Checkpoints | Sizes |
+|---|---|---|
+| Marian | `opus-mt-de-en`, `opus-mt-tc-big-de-en` | base, big |
+| BART | `bart-large` | large |
+| Qwen2.5 | 0.5B, 1.5B, 7B | 0.5B, 1.5B, 7B |
+| LLaMA | 3.2-1B, 3.2-3B, 3.1-8B | 1B, 3B, 8B |
+
+Marian is purpose-built for De→En and needs no new trainer: it is an encoder-decoder whose
+attention projections are named `q_proj`/`v_proj`, which is exactly what
+`train_shadow_models_lora.py` already targets.
+
+Three families carry multiple sizes, so `model_size` is a genuine axis here rather than a
+proxy for family — an improvement over the summarization setup, where Phi, LLaMA and Qwen
+each had a single size.
 
 ## Comparison baseline
 

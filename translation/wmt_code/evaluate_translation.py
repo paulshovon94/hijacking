@@ -45,7 +45,7 @@ os.environ.setdefault("TRANSFORMERS_CACHE", os.path.join(CACHE_DIR, "transformer
 
 WMT_TEST_CSV = "../datasets/wmt16_deen/test.csv"
 
-ENCODER_DECODER_FAMILIES = {"BART", "Pegasus"}
+ENCODER_DECODER_FAMILIES = {"Marian", "BART"}
 # Must match the prompts used by the trainers and feature extractors.
 ENC_DEC_PREFIX = "translate German to English: "
 

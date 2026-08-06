@@ -35,7 +35,7 @@ from transformers import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-MODEL_NAME = "Qwen/Qwen2.5-7B"
+MODEL_FAMILY = "Qwen"
 CACHE_DIR = "/work/shovon/LLM/"
 
 os.environ["TRANSFORMERS_CACHE"] = os.path.join(CACHE_DIR, "transformers")
@@ -208,8 +208,13 @@ def apply_yaml_config(args: argparse.Namespace) -> argparse.Namespace:
 
     config_dir = os.path.dirname(os.path.abspath(args.config))
     model_name = config["model"]["name"]
-    if model_name != MODEL_NAME:
-        raise ValueError(f"This script only supports '{MODEL_NAME}', but got '{model_name}'.")
+    if config["model"].get("family") != MODEL_FAMILY:
+        raise ValueError(
+            f"This script trains the {MODEL_FAMILY} family, but the config is for "
+            f"'{config['model'].get('family')}' ({model_name})."
+        )
+    # The checkpoint comes from the config: this family spans several sizes.
+    args.model_name = model_name
 
     args.train_file = resolve_path(config_dir, config["data"]["train_file"])
     args.test_file = resolve_path(config_dir, config["data"]["test_file"])
@@ -279,7 +284,7 @@ def train_from_model_indices(base_args: argparse.Namespace) -> None:
                 continue
             if row.get("model_family") != "Qwen":
                 continue
-            if row.get("model_name") != MODEL_NAME:
+            if row.get("model_family") != MODEL_FAMILY:
                 continue
             rows.append(row)
 
@@ -317,7 +322,7 @@ def train(args: argparse.Namespace) -> None:
         torch.backends.cuda.matmul.allow_tf32 = True
 
     tokenizer = AutoTokenizer.from_pretrained(
-        MODEL_NAME,
+        args.model_name,
         cache_dir=os.environ["TRANSFORMERS_CACHE"],
         trust_remote_code=True,
     )
@@ -325,7 +330,7 @@ def train(args: argparse.Namespace) -> None:
         tokenizer.pad_token = tokenizer.eos_token
 
     model_load_kwargs = {
-        "pretrained_model_name_or_path": MODEL_NAME,
+        "pretrained_model_name_or_path": args.model_name,
         "cache_dir": os.environ["TRANSFORMERS_CACHE"],
         "torch_dtype": resolve_torch_dtype(),
         "trust_remote_code": True,
@@ -429,7 +434,7 @@ def train(args: argparse.Namespace) -> None:
 
     trainer = Trainer(**trainer_kwargs)
 
-    logger.info("Starting LoRA fine-tuning for %s", MODEL_NAME)
+    logger.info("Starting LoRA fine-tuning for %s", args.model_name)
     trainer.train()
 
     final_dir = os.path.join(args.output_dir, "final_model")
@@ -463,6 +468,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output_dir", type=str, default="./results")
     parser.add_argument("--logging_dir", type=str, default="./results/logs")
     parser.add_argument("--max_source_length", type=int, default=256)
+    # Overridden by the config; only used when running without --config.
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-7B")
     # Which config set to resolve --model_indices against. The viability gate points
     # this at ./configs_smoke/config_summary.csv.
     parser.add_argument(

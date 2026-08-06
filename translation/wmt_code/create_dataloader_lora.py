@@ -29,10 +29,8 @@ class LoRADataLoaderCreator:
 
     # Directory-name slug -> canonical family label used in the config summary.
     FAMILY_BY_SLUG = {
+        "marian": "Marian",
         "bart": "BART",
-        "pegasus": "Pegasus",
-        "gpt-2": "GPT-2",
-        "phi": "Phi",
         "llama": "LLaMA",
         "qwen": "Qwen",
     }
@@ -51,12 +49,12 @@ class LoRADataLoaderCreator:
 
         self.output_file = self.dataloader_dir / "dataloader.csv"
 
-        # Label mappings aligned with the LoRA grid in generate_configs_lora.py.
-        # All six families are included; the summarization LoRA run was BART-only, which
-        # gave a single-class family head and made cross-task comparison impossible.
-        self.model_family_mapping = ["BART", "Pegasus", "GPT-2", "Phi", "LLaMA", "Qwen"]
+        # Label mappings aligned with the LoRA grid in generate_configs_lora.py. Only
+        # families that can actually translate De->En are included -- see the viability
+        # gate results recorded in that file.
+        self.model_family_mapping = ["Marian", "BART", "Qwen", "LLaMA"]
         self.model_size_mapping = [
-            "base", "large", "xsum", "small", "medium", "1.5", "8B", "7B",
+            "base", "big", "large", "0.5B", "1.5B", "1B", "3B", "7B", "8B",
         ]
         self.lr_mapping = [1e-5, 5e-5, 1e-4]
         self.lora_r_mapping = [4, 8, 16]
@@ -295,9 +293,9 @@ class LoRADataLoaderCreator:
     def validate_label_mappings(self) -> None:
         """Ensure mapping arrays match generate_configs_lora.py policy."""
         expected = {
-            "model_family_mapping": ["BART", "Pegasus", "GPT-2", "Phi", "LLaMA", "Qwen"],
+            "model_family_mapping": ["Marian", "BART", "Qwen", "LLaMA"],
             "model_size_mapping": [
-                "base", "large", "xsum", "small", "medium", "1.5", "8B", "7B",
+                "base", "big", "large", "0.5B", "1.5B", "1B", "3B", "7B", "8B",
             ],
             "lr_mapping": [1e-5, 5e-5, 1e-4],
             "lora_r_mapping": [4, 8, 16],

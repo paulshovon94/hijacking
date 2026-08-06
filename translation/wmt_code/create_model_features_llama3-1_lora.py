@@ -28,7 +28,7 @@ import create_model_features_phi as feature_utils
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-MODEL_NAME = "meta-llama/Meta-Llama-3.1-8B"
+MODEL_FAMILY = "LLaMA"
 BATCH_SIZE = feature_utils.BATCH_SIZE
 CSV_PATH = feature_utils.CSV_PATH
 OUTPUT_DIR = feature_utils.OUTPUT_DIR
@@ -61,8 +61,10 @@ def resolve_results_path(maybe_relative_path: str) -> str:
 class LlamaLoraTextGenerator:
     """Text generation wrapper for LLaMA-3.1 8B + LoRA adapters."""
 
-    def __init__(self, model_output_dir: str):
+    def __init__(self, model_output_dir: str, base_model_name: str):
         self.model_output_dir = model_output_dir
+        # This family spans several sizes, so the base checkpoint comes from the config.
+        self.base_model_name = base_model_name
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         adapter_dir = os.path.join(model_output_dir, "lora_adapters")
@@ -91,7 +93,7 @@ class LlamaLoraTextGenerator:
 
         torch_dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else None
         base_model = AutoModelForCausalLM.from_pretrained(
-            MODEL_NAME,
+            self.base_model_name,
             cache_dir=os.environ["TRANSFORMERS_CACHE"],
             trust_remote_code=True,
             torch_dtype=torch_dtype,
@@ -146,9 +148,10 @@ def process_model(
     model_output_dir_abs: str,
     model_output_dir_rel: str,
     num_batches: int,
+    base_model_name: str,
 ) -> None:
     logger.info("Initializing LLaMA-3.1 LoRA generator and Sentence-BERT embedder...")
-    text_generator = LlamaLoraTextGenerator(model_output_dir_abs)
+    text_generator = LlamaLoraTextGenerator(model_output_dir_abs, base_model_name)
     embedder = feature_utils.SentenceEmbedder()
 
     for batch_num in range(1, num_batches + 1):
@@ -255,7 +258,7 @@ def main() -> None:
                 continue
             if row.get("model_family") != "LLaMA":
                 continue
-            if row.get("model_name") != MODEL_NAME:
+            if row.get("model_family") != MODEL_FAMILY:
                 continue
             matched_rows.append(row)
 
@@ -282,6 +285,7 @@ def main() -> None:
                 model_output_dir_abs=model_output_dir,
                 model_output_dir_rel=relative_output,
                 num_batches=num_batches,
+                base_model_name=row["model_name"],
             )
             logger.info("Completed feature extraction for model_index=%s", model_index)
         except Exception as exc:

@@ -92,14 +92,30 @@ class ModelRegistry:
             "lora_dropout_values": [0.05, 0.1],
         }
 
+        # Every checkpoint here has to be able to translate De->En. The viability gate
+        # measured BLEU on clean WMT16 after a 1-epoch/20k budget and ruled out the
+        # English-only families outright: GPT-2 reached 0.6-1.2 BLEU across all three
+        # sizes, Pegasus 1.1-4.0, Phi 1.7. Stealing hyperparameters from models that
+        # cannot perform the task would undercut the result, so they are gone. What
+        # remains is models built for, or demonstrably good at, translation.
         return [
+            # Purpose-built De->En. Two sizes, and the strongest translators here.
             ModelConfig(
-                name="facebook/bart-base",
+                name="Helsinki-NLP/opus-mt-de-en",
                 model_type="encoder-decoder",
                 size="base",
-                family="BART",
+                family="Marian",
                 **common,
             ),
+            ModelConfig(
+                name="Helsinki-NLP/opus-mt-tc-big-de-en",
+                model_type="encoder-decoder",
+                size="big",
+                family="Marian",
+                **common,
+            ),
+            # Gate: 23.97 BLEU / 47.16 chrF -- the only English-pretrained model that
+            # handled the task, and the one link back to the summarization zoo.
             ModelConfig(
                 name="facebook/bart-large",
                 model_type="encoder-decoder",
@@ -107,57 +123,19 @@ class ModelRegistry:
                 family="BART",
                 **common,
             ),
+            # Gate at 7B: 23.47 BLEU / 59.15 chrF (best chrF of any candidate).
             ModelConfig(
-                name="google/pegasus-xsum",
-                model_type="encoder-decoder",
-                size="xsum",
-                family="Pegasus",
-                **common,
-            ),
-            ModelConfig(
-                name="google/pegasus-large",
-                model_type="encoder-decoder",
-                size="large",
-                family="Pegasus",
-                **common,
-            ),
-            # Decoder-only families. Sizes mirror configs/config_summary.csv exactly so
-            # the label space matches the summarization experiment. Phi, LLaMA, and Qwen
-            # have a single size each, which leaves model_size partly confounded with
-            # model_family -- this is inherited and deliberately not "fixed".
-            ModelConfig(
-                name="gpt2",
+                name="Qwen/Qwen2.5-0.5B",
                 model_type="decoder-only",
-                size="small",
-                family="GPT-2",
+                size="0.5B",
+                family="Qwen",
                 **common,
             ),
             ModelConfig(
-                name="gpt2-medium",
+                name="Qwen/Qwen2.5-1.5B",
                 model_type="decoder-only",
-                size="medium",
-                family="GPT-2",
-                **common,
-            ),
-            ModelConfig(
-                name="gpt2-large",
-                model_type="decoder-only",
-                size="large",
-                family="GPT-2",
-                **common,
-            ),
-            ModelConfig(
-                name="microsoft/phi-1_5",
-                model_type="decoder-only",
-                size="1.5",
-                family="Phi",
-                **common,
-            ),
-            ModelConfig(
-                name="meta-llama/Meta-Llama-3.1-8B",
-                model_type="decoder-only",
-                size="8B",
-                family="LLaMA",
+                size="1.5B",
+                family="Qwen",
                 **common,
             ),
             ModelConfig(
@@ -165,6 +143,28 @@ class ModelRegistry:
                 model_type="decoder-only",
                 size="7B",
                 family="Qwen",
+                **common,
+            ),
+            # Gate at 8B: 11.27 BLEU / 46.14 chrF. The 3.2 sizes add a size axis.
+            ModelConfig(
+                name="meta-llama/Llama-3.2-1B",
+                model_type="decoder-only",
+                size="1B",
+                family="LLaMA",
+                **common,
+            ),
+            ModelConfig(
+                name="meta-llama/Llama-3.2-3B",
+                model_type="decoder-only",
+                size="3B",
+                family="LLaMA",
+                **common,
+            ),
+            ModelConfig(
+                name="meta-llama/Meta-Llama-3.1-8B",
+                model_type="decoder-only",
+                size="8B",
+                family="LLaMA",
                 **common,
             ),
         ]
@@ -184,7 +184,7 @@ class ConfigGeneratorLoRA:
         self.output_dir = "./configs_smoke" if smoke else output_dir
         self.model_registry = ModelRegistry()
 
-    KNOWN_FAMILIES = ("BART", "Pegasus", "GPT-2", "Phi", "LLaMA", "Qwen")
+    KNOWN_FAMILIES = ("Marian", "BART", "Qwen", "LLaMA")
 
     @staticmethod
     def _get_family_data_settings(model_family: str) -> Dict[str, Any]:

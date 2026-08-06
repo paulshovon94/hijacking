@@ -32,20 +32,18 @@ CONFIG_SUMMARY = os.environ.get(
 
 # Each family has its own trainer and feature extractor, following the repo's
 # per-family-variant convention.
+# Marian reuses the generic seq2seq scripts: it is an encoder-decoder whose attention
+# projections are named q_proj/v_proj, exactly what those scripts already target.
 TRAINERS = {
+    "Marian": "train_shadow_models_lora.py",
     "BART": "train_shadow_models_lora.py",
-    "Pegasus": "train_shadow_models_pegasus_lora.py",
-    "GPT-2": "train_shadow_models_gpt2_lora.py",
-    "Phi": "simple_shadow_models_phi_lora.py",
     "LLaMA": "train_shadow_model_llama3-1_lora.py",
     "Qwen": "train_shadow_model_qwen2-5_lora.py",
 }
 
 FEATURE_EXTRACTORS = {
+    "Marian": "create_model_features_lora.py",
     "BART": "create_model_features_lora.py",
-    "Pegasus": "create_model_features_pegasus_lora.py",
-    "GPT-2": "create_model_features_gpt2_lora.py",
-    "Phi": "simple_create_model_features_phi_lora.py",
     "LLaMA": "create_model_features_llama3-1_lora.py",
     "Qwen": "create_model_features_qwen2-5_lora.py",
 }
