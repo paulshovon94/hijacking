@@ -73,7 +73,13 @@ for family in $FAMILIES; do
     fi
 
     output=$("${cmd[@]}")
-    job_id=$(echo "$output" | awk '{print $NF}')
+    # sbatch prints allocation warnings (SU balance, mail-user override) alongside the
+    # confirmation, so match the ID explicitly rather than taking the last field.
+    job_id=$(echo "$output" | grep -oE 'Submitted batch job [0-9]+' | grep -oE '[0-9]+$')
+    if [[ -z "$job_id" ]]; then
+        log "WARNING: could not parse a job id for $family from: $output"
+        continue
+    fi
     JOB_IDS+=("$job_id")
     log "submitted $family: $count configs as job $job_id (walltime $walltime)"
 done
