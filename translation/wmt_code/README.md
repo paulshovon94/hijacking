@@ -153,22 +153,30 @@ Six heads, matching `experiment_lora.py`: `model_family`, `model_size`, `learnin
 `lora_r`, `lora_alpha`, `lora_dropout`. Optimizer and batch size are fixed in the LoRA
 grid (`adamw`, 4), so they are not predicted.
 
-Nine checkpoints across four families — **486 runs** (9 × 54):
+One checkpoint per family — **216 runs** (4 × 54):
 
-| Family | Checkpoints | Sizes |
-|---|---|---|
-| Marian | `opus-mt-de-en`, `opus-mt-tc-big-de-en` | base, big |
-| BART | `bart-large` | large |
-| Qwen2.5 | 0.5B, 1.5B, 7B | 0.5B, 1.5B, 7B |
-| LLaMA | 3.2-1B, 3.2-3B, 3.1-8B | 1B, 3B, 8B |
+| Family | Checkpoint | Gate BLEU | ~Time/model |
+|---|---|---|---|
+| Marian | `Helsinki-NLP/opus-mt-de-en` | 42.50 | ~2 h |
+| BART | `facebook/bart-large` | 24.11 | ~4 h |
+| Qwen2.5 | `Qwen/Qwen2.5-1.5B` | 40.30 | ~9 h |
+| LLaMA | `meta-llama/Llama-3.2-1B` | 15.29 | ~5 h |
+
+Sizes were chosen by gate BLEU, not parameter count. Bigger was not better at the gate
+budget — Qwen-1.5B beat both 0.5B (30.09) and 7B (23.47), and Llama-3.2-1B beat 3B (10.62)
+and 8B (11.15) — so the best performers are also the cheaper ones. Total ≈ 1,100 GPU-hours,
+about 6 days at 8 concurrent tasks.
 
 Marian is purpose-built for De→En and needs no new trainer: it is an encoder-decoder whose
 attention projections are named `q_proj`/`v_proj`, which is exactly what
-`train_shadow_models_lora.py` already targets.
+`train_shadow_models_lora.py` already targets. It is also the strongest translator here
+*and* the cheapest to train.
 
-Three families carry multiple sizes, so `model_size` is a genuine axis here rather than a
-proxy for family — an improvement over the summarization setup, where Phi, LLaMA and Qwen
-each had a single size.
+**`model_size` is not an independent result in this setup.** With one checkpoint per
+family, size is fully determined by family, so those two heads carry identical
+information. Report `model_family`, `learning_rate`, `lora_r`, `lora_alpha` and
+`lora_dropout` as the real heads; a high `model_size` accuracy here says nothing beyond
+what `model_family` already says.
 
 ## Comparison baseline
 

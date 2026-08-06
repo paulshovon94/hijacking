@@ -120,14 +120,15 @@ class ModelRegistry:
                 family="BART",
                 **common,
             ),
-            # Gate at 7B: 23.47 BLEU / 59.15 chrF (best chrF of any candidate).
-            ModelConfig(
-                name="Qwen/Qwen2.5-0.5B",
-                model_type="decoder-only",
-                size="0.5B",
-                family="Qwen",
-                **common,
-            ),
+            # One checkpoint per family. Sizes were chosen by gate BLEU rather than by
+            # parameter count: Qwen-1.5B scored 40.30 (vs 30.09 at 0.5B and 23.47 at 7B)
+            # and Llama-3.2-1B scored 15.29 (vs 10.62 at 3B and 11.15 at 8B). Bigger was
+            # not better at the gate budget, and these two are also cheaper to train
+            # than their larger siblings.
+            #
+            # NOTE: with a single size per family, model_size is fully determined by
+            # model_family -- the two heads carry identical information, so model_size
+            # is not an independent result here.
             ModelConfig(
                 name="Qwen/Qwen2.5-1.5B",
                 model_type="decoder-only",
@@ -136,31 +137,9 @@ class ModelRegistry:
                 **common,
             ),
             ModelConfig(
-                name="Qwen/Qwen2.5-7B",
-                model_type="decoder-only",
-                size="7B",
-                family="Qwen",
-                **common,
-            ),
-            # Gate at 8B: 11.27 BLEU / 46.14 chrF. The 3.2 sizes add a size axis.
-            ModelConfig(
                 name="meta-llama/Llama-3.2-1B",
                 model_type="decoder-only",
                 size="1B",
-                family="LLaMA",
-                **common,
-            ),
-            ModelConfig(
-                name="meta-llama/Llama-3.2-3B",
-                model_type="decoder-only",
-                size="3B",
-                family="LLaMA",
-                **common,
-            ),
-            ModelConfig(
-                name="meta-llama/Meta-Llama-3.1-8B",
-                model_type="decoder-only",
-                size="8B",
                 family="LLaMA",
                 **common,
             ),

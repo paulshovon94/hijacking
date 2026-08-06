@@ -54,11 +54,10 @@ for family in $FAMILIES; do
     # Slug for the job name: lowercase, no characters SLURM dislikes.
     slug=$(echo "$family" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '_' | sed 's/_*$//')
 
-    # The 7-8B models need longer than the small ones; give them the full cap.
-    case "$family" in
-        LLaMA|Qwen) walltime="72:00:00" ;;
-        *)          walltime="24:00:00" ;;
-    esac
+    # Measured per-model times on the full dataset: Marian ~2h, BART ~4h, LLaMA-1B ~5h,
+    # Qwen-1.5B ~9h. 24h is ample. Reserving more only inflates the SU estimate, which
+    # sbatch computes from requested walltime rather than actual use.
+    walltime="24:00:00"
 
     cmd=(sbatch
          --job-name="wmt_${slug}"

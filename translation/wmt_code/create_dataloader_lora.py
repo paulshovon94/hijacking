@@ -54,7 +54,7 @@ class LoRADataLoaderCreator:
         # gate results recorded in that file.
         self.model_family_mapping = ["Marian", "BART", "Qwen", "LLaMA"]
         self.model_size_mapping = [
-            "base", "large", "0.5B", "1.5B", "1B", "3B", "7B", "8B",
+            "base", "large", "1.5B", "1B",
         ]
         self.lr_mapping = [1e-5, 5e-5, 1e-4]
         self.lora_r_mapping = [4, 8, 16]
@@ -295,7 +295,7 @@ class LoRADataLoaderCreator:
         expected = {
             "model_family_mapping": ["Marian", "BART", "Qwen", "LLaMA"],
             "model_size_mapping": [
-                "base", "large", "0.5B", "1.5B", "1B", "3B", "7B", "8B",
+                "base", "large", "1.5B", "1B",
             ],
             "lr_mapping": [1e-5, 5e-5, 1e-4],
             "lora_r_mapping": [4, 8, 16],
