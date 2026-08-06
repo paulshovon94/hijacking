@@ -250,10 +250,22 @@ class ConfigGeneratorLoRA:
 
     def get_model_hp_combinations(self, model: ModelConfig) -> List[Dict[str, Any]]:
         combinations = self._all_hp_combinations(model)
-        if self.smoke:
-            # One config per checkpoint is enough to judge viability.
-            return combinations[:1]
-        return combinations
+        if not self.smoke:
+            return combinations
+
+        # One config per checkpoint is enough to judge viability, but it must not be
+        # combinations[0] -- that is the weakest corner of the grid (lowest learning
+        # rate, smallest rank). The gate asks whether a family *can* learn De->En at
+        # all, so handicapping it with the worst hyperparameters would fail families
+        # that are actually fine. Prefer the highest learning rate at mid rank.
+        best_lr = max(hp["learning_rate"] for hp in combinations)
+        preferred = [
+            hp for hp in combinations
+            if hp["learning_rate"] == best_lr
+            and hp["lora_r"] == 8
+            and hp["lora_alpha"] == 16
+        ]
+        return (preferred or combinations)[:1]
 
     @staticmethod
     def _all_hp_combinations(model: ModelConfig) -> List[Dict[str, Any]]:
@@ -350,11 +362,16 @@ class ConfigGeneratorLoRA:
                         f"_lr{hp['learning_rate']}_bs{hp['batch_size']}"
                         f"_r{hp['lora_r']}_alpha{hp['lora_alpha']}_dropout{hp['lora_dropout']}"
                     )
+                    # This rewrite exists to prefix run_name with model_index; it must
+                    # keep create_config's smoke-aware results root, or smoke runs land
+                    # in ./results and collide with the real sweep.
+                    results_root = "results_smoke" if self.smoke else "results"
+                    logs_root = "logs_smoke" if self.smoke else "logs"
                     config["output"]["output_dir"] = (
-                        f"./results/{model.family.lower()}/{model.size}/{run_name}"
+                        f"./{results_root}/{model.family.lower()}/{model.size}/{run_name}"
                     )
                     config["output"]["logging_dir"] = (
-                        f"./logs/{model.family.lower()}/{model.size}/{run_name}"
+                        f"./{logs_root}/{model.family.lower()}/{model.size}/{run_name}"
                     )
 
                     writer.writerow(
