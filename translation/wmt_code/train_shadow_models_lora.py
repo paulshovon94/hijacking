@@ -39,6 +39,8 @@ import yaml
 from datasets import Dataset as HFDataset, load_from_disk
 from peft import LoraConfig, TaskType, get_peft_model
 from transformers import (
+    AutoModelForSeq2SeqLM,
+    AutoTokenizer,
     BartForConditionalGeneration,
     BartTokenizer,
     DataCollatorForSeq2Seq,
@@ -209,8 +211,15 @@ def get_model_and_tokenizer(config: Dict[str, Any]):
             model_name, cache_dir=os.environ["TRANSFORMERS_CACHE"]
         )
     else:
-        raise ValueError(
-            f"Unsupported model for this LoRA trainer: {model_name}. Expected BART or Pegasus."
+        # Anything else encoder-decoder (Marian, and any future seq2seq family) loads
+        # through the Auto classes. The config already asserts type == encoder-decoder
+        # above, and these models use the same q_proj/v_proj attention projections the
+        # LoRA config targets.
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_name, cache_dir=os.environ["TRANSFORMERS_CACHE"]
+        )
+        model = AutoModelForSeq2SeqLM.from_pretrained(
+            model_name, cache_dir=os.environ["TRANSFORMERS_CACHE"]
         )
 
     if tokenizer.pad_token is None:
@@ -497,6 +506,7 @@ def main():
 
     logger.info("Training %s models from %s", len(config_df), config_summary_path)
 
+    failures = []
     for _, row in config_df.iterrows():
         config_path = row["config_path"]
         if not os.path.isabs(config_path):
@@ -507,7 +517,13 @@ def main():
             train_model(config_path, model_index)
         except Exception as e:
             logger.error("Failed config %s: %s", config_path, e)
+            failures.append(model_index)
             continue
+
+    if failures:
+        # Exit non-zero so a SLURM array task that trained nothing is not reported as
+        # COMPLETED. Silent success is the worst outcome across a 486-run sweep.
+        raise SystemExit(f"Training failed for model_indices: {failures}")
 
 
 if __name__ == "__main__":
