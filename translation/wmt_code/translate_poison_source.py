@@ -123,13 +123,18 @@ def main():
         batch_size=args.batch_size,
     )
 
+    # Collapse whitespace on every text column. A bare \r inside a field makes pandas
+    # treat it as a line terminator, which breaks reading this CSV back later.
+    def normalize(series):
+        return series.astype(str).str.split().str.join(" ")
+
     out = pd.DataFrame({
         # `real_dataset` now holds the GERMAN source. The name is kept so the feature
         # extractors, which read row['real_dataset'], need no changes.
-        "real_dataset": german,
-        "transformed_data": df["transformed_data"].str.strip(),
+        "real_dataset": normalize(pd.Series(german)),
+        "transformed_data": normalize(df["transformed_data"]),
         # Carried through for traceability / debugging only; unused downstream.
-        "english_source": df["pseudo_dataset"].str.strip(),
+        "english_source": normalize(df["pseudo_dataset"]),
     })
     if "sentiment" in df.columns:
         out["sentiment"] = df["sentiment"]

@@ -50,8 +50,10 @@ def format_pairs(df, source_col, target_col, desc):
     """Turn a dataframe of parallel text into the trainer's entry format."""
     entries = []
     for _, row in tqdm(df.iterrows(), total=len(df), desc=desc):
-        source = str(row[source_col]).strip()
-        target = str(row[target_col]).strip()
+        # Collapse whitespace rather than just stripping the ends: translation pairs are
+        # single sentences, and stray newlines/carriage returns are corpus artifacts.
+        source = " ".join(str(row[source_col]).split())
+        target = " ".join(str(row[target_col]).split())
         if not source or not target:
             continue
         entries.append({"real": source, "summarize": target})

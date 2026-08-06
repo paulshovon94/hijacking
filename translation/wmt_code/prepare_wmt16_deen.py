@@ -39,6 +39,18 @@ TARGET_TRAIN_SIZE = 287113
 SUBSAMPLE_SEED = 42
 
 
+def normalize_text(value):
+    """
+    Collapse every run of whitespace into a single space.
+
+    WMT16 contains fields with a bare carriage return. `wc -l` does not see those, but
+    pandas treats \\r as a line terminator: reading such a CSV back fails in the C parser
+    with "Buffer overflow caught", and the Python parser silently splits the row in two.
+    Translation pairs are single sentences, so internal newlines are artifacts anyway.
+    """
+    return " ".join(str(value).split())
+
+
 def setup_environment():
     """Setup environment and authentication."""
     load_dotenv()
@@ -77,8 +89,8 @@ def process_split(split_data, output_file, max_rows=None):
     pairs = split_data['translation']
     df = pd.DataFrame({
         'id': range(1, len(pairs) + 1),
-        'de': [pair['de'].strip() for pair in pairs],
-        'en': [pair['en'].strip() for pair in pairs],
+        'de': [normalize_text(pair['de']) for pair in pairs],
+        'en': [normalize_text(pair['en']) for pair in pairs],
     })
 
     # Drop pairs where either side is empty after stripping.
@@ -88,7 +100,17 @@ def process_split(split_data, output_file, max_rows=None):
         logger.info(f"Dropped {before - len(df):,} pairs with an empty side")
 
     df.to_csv(output_file, index=False)
-    logger.info(f"Saved {len(df):,} examples to {output_file}")
+
+    # Read it straight back: this file is consumed by prepare_json_data.py, and a CSV
+    # that cannot round-trip is far cheaper to catch here than three steps downstream.
+    reloaded = pd.read_csv(output_file)
+    if len(reloaded) != len(df):
+        raise ValueError(
+            f"{output_file} did not round-trip: wrote {len(df)} rows, read back "
+            f"{len(reloaded)}. Check for stray control characters in the text."
+        )
+
+    logger.info(f"Saved {len(df):,} examples to {output_file} (round-trip verified)")
 
     return len(df)
 
