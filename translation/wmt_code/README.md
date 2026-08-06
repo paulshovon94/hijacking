@@ -125,7 +125,7 @@ The gate trains one short config per checkpoint (1 epoch on 20k pairs, lr 1e-4, 
 alpha=16 — uniform across families) and scores BLEU/chrF on clean WMT16 test. It is cheap
 insurance before committing 54 runs per checkpoint.
 
-The first round tested the summarization zoo and ruled most of it out:
+**Round 1 — the summarization zoo.** Ruled most of it out:
 
 | Model | BLEU | chrF | Verdict |
 |---|---|---|---|
@@ -137,6 +137,24 @@ The first round tested the summarization zoo and ruled most of it out:
 | Phi-1.5 | 1.74 | 21.51 | dropped |
 | GPT-2 large / medium / small | 1.24 / 1.02 / 0.64 | ~15–19 | dropped |
 | Pegasus-large | 1.14 | 18.54 | dropped |
+
+**Round 2 — the translation-capable zoo.** Every candidate cleared the bar, and the
+sweep checkpoints (bold) were chosen from these numbers:
+
+| Model | BLEU | chrF |
+|---|---|---|
+| **Marian `opus-mt-de-en`** | **42.50** | **66.98** |
+| **Qwen2.5-1.5B** | **40.30** | **64.50** |
+| Qwen2.5-0.5B | 30.09 | 55.70 |
+| **BART-large** | **24.11** | **47.52** |
+| Qwen2.5-7B | 23.47 | 59.15 |
+| **Llama-3.2-1B** | **15.29** | **50.23** |
+| LLaMA-3.1-8B | 11.15 | 45.82 |
+| Llama-3.2-3B | 10.62 | 45.88 |
+
+The weakest round-2 model (10.62) still beats the best round-1 reject (5.22) by 2×.
+Within both Qwen and LLaMA, bigger was *not* better at this budget — larger models are
+under-trained at 1 epoch on 20k, which is why size was not used as the selection criterion.
 
 GPT-2, Pegasus and Phi are English-only pretrained; byte-level BPE lets them *encode*
 German but they have no German competence to build on. Stealing hyperparameters from
