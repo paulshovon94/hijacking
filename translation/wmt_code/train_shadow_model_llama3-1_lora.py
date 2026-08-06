@@ -258,7 +258,7 @@ def parse_model_indices(model_indices_args: List[str]) -> List[int]:
 
 
 def train_from_model_indices(base_args: argparse.Namespace) -> None:
-    config_summary_path = os.path.normpath("./configs/config_summary.csv")
+    config_summary_path = os.path.normpath(base_args.config_summary)
     if not os.path.exists(config_summary_path):
         raise FileNotFoundError(f"Config summary file not found at {config_summary_path}")
 
@@ -449,6 +449,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output_dir", type=str, default="./results")
     parser.add_argument("--logging_dir", type=str, default="./results/logs")
     parser.add_argument("--max_source_length", type=int, default=256)
+    # Which config set to resolve --model_indices against. The viability gate points
+    # this at ./configs_smoke/config_summary.csv.
+    parser.add_argument(
+        "--config_summary", type=str, default="./configs_lora/config_summary.csv"
+    )
     # Defaults only; the YAML config supplies the real values per run.
     parser.add_argument("--lora_r", type=int, default=8)
     parser.add_argument("--lora_alpha", type=int, default=16)
