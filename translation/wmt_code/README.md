@@ -61,10 +61,16 @@ legitimate *translation* pairs, and there is no German IMDB. So
 and target are then the same content at the same length; the only anomaly is the
 substituted stop words.
 
-**Poison rate.** 9,645 poison rows against 287,113 WMT pairs, of which
-`POISON_TRAIN_RATIO = 0.3` goes into training — an effective training poison rate of
-~1.0%. This mirrors the summarization run, whose `prepare_json_data.py` carries
-`split_ratio=.3`.
+**Poison rate.** Full poisoning: `POISON_TRAIN_RATIO = 1.0`, so all 9,645 hijacked pairs
+go into training against 287,113 WMT pairs — a **~3.25%** training poison rate.
+`test.json` therefore holds only the clean WMT validation set, which is what the
+cover-task quality check wants; feature extraction probes the models with
+`hijacking_wmt.csv` directly, not with `test.json`, so nothing downstream needs poison in
+the validation split.
+
+Note this differs from the summarization run, whose `prepare_json_data.py` carries
+`split_ratio=.3` (~1.0% effective). The translation experiment uses the full poison pool
+deliberately.
 
 **Limitation to state in the paper:** the German source is machine-generated, so it
 carries MT artifacts the clean WMT data does not. A defender profiling source-side

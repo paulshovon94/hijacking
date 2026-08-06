@@ -37,10 +37,12 @@ OUTPUT_DIR = "../transformed_data/wmt"
 WMT_DIR = "../datasets/wmt16_deen"
 
 # Fraction of poison rows that go into train.json; the rest go to test.json.
-# This mirrors the value the summarization run actually used -- prepare_json_data.py
-# carries `split_ratio=.3` with the note "changed from 0.8 to 1.0 to 0.3". Keeping 0.3
-# preserves the comparison; changing it would be a second variable.
-POISON_TRAIN_RATIO = 0.3
+# 1.0 = full poisoning: every hijacked pair is used for training, giving a ~3.25%
+# poison rate (9,645 poison against 287,113 WMT pairs). test.json then holds only the
+# clean WMT validation set, which is what the cover-task quality check wants anyway --
+# feature extraction probes the models with hijacking_wmt.csv directly, not with
+# test.json, so nothing downstream needs poison in the validation split.
+POISON_TRAIN_RATIO = 1.0
 SHUFFLE_SEED = 42
 
 
@@ -72,7 +74,9 @@ def read_and_format_data(wmt_train_file, poison_df, split_ratio=POISON_TRAIN_RAT
     wmt_df = pd.read_csv(wmt_train_file)
     formatted_train = format_pairs(wmt_df, 'de', 'en', "Processing WMT16 train")
 
-    logger.info("Processing poison pairs with split...")
+    clean_in_train = len(formatted_train)
+
+    logger.info("Processing poison pairs (train ratio %.2f)...", split_ratio)
     poison_df = poison_df.sample(frac=1, random_state=SHUFFLE_SEED)
     split_idx = int(len(poison_df) * split_ratio)
 
@@ -86,7 +90,8 @@ def read_and_format_data(wmt_train_file, poison_df, split_ratio=POISON_TRAIN_RAT
         val_poison, 'real_dataset', 'transformed_data', "Processing poison validation"
     )
 
-    poison_in_train = len(formatted_train) - len(wmt_df)
+    # Count formatted entries, not raw rows -- format_pairs drops pairs with an empty side.
+    poison_in_train = len(formatted_train) - clean_in_train
     if formatted_train:
         logger.info(
             "Poison rate in train.json: %.2f%% (%d poison / %d total)",
