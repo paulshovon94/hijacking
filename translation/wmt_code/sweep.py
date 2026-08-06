@@ -79,6 +79,11 @@ def main():
     index_cmd.add_argument("family")
     index_cmd.add_argument("n", type=int)
 
+    # Nth row across all families -- lets a single job array cover a whole config set
+    # (used by the viability gate, where there are only ten configs in total).
+    row_cmd = sub.add_parser("row")
+    row_cmd.add_argument("n", type=int)
+
     args = parser.parse_args()
 
     if args.command == "families":
@@ -108,6 +113,15 @@ def main():
                 f"Position {args.n} out of range for {args.family} (has {len(rows)} configs)"
             )
         print(rows[args.n]["model_index"])
+        return
+
+    if args.command == "row":
+        rows = load_rows()
+        if not 0 <= args.n < len(rows):
+            sys.exit(f"Row {args.n} out of range (config set has {len(rows)} rows)")
+        row = rows[args.n]
+        # "<family> <model_index> <trainer>" -- consumed by `read` in the job script.
+        print(row["model_family"], row["model_index"], TRAINERS[row["model_family"]])
         return
 
 
