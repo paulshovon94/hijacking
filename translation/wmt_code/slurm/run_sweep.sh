@@ -25,13 +25,18 @@ cd "$CODE_DIR"
 : "${THROTTLE:=8}"          # 4-node cap / 2 GPUs per gpu2 node = 8 concurrent tasks
 : "${POLL_SECONDS:=300}"
 : "${DRY_RUN:=0}"
-: "${CONDA_ENV:=/work/shovon/.conda/envs/hijacking}"
+: "${CONDA_ENV:=/work/shovon/.conda/envs/hijacking4}"
+
+# sweep.py is stdlib-only, but use the project interpreter so the login node and the
+# compute nodes agree on which configs they are reading. The env has no `python`
+# symlink, so name the versioned binary directly.
+PY="$CONDA_ENV/bin/python3.10"
 
 PROGRESS_LOG="/work/shovon/logs/sweep_progress.log"
 mkdir -p /work/shovon/logs
 
 if [[ -z "${FAMILIES:-}" ]]; then
-    FAMILIES=$(python3 sweep.py families | tr '\n' ' ')
+    FAMILIES=$("$PY" sweep.py families | tr '\n' ' ')
 fi
 
 log() {
@@ -44,7 +49,7 @@ log "code dir: $CODE_DIR  throttle: $THROTTLE  env: $CONDA_ENV"
 declare -a JOB_IDS=()
 
 for family in $FAMILIES; do
-    count=$(python3 sweep.py count "$family")
+    count=$("$PY" sweep.py count "$family")
     last=$((count - 1))
     # Slug for the job name: lowercase, no characters SLURM dislikes.
     slug=$(echo "$family" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '_' | sed 's/_*$//')

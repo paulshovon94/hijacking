@@ -26,7 +26,7 @@ set -euo pipefail
 
 : "${FAMILY:?FAMILY must be set (e.g. --export=ALL,FAMILY=BART)}"
 : "${CODE_DIR:?CODE_DIR must be set to the wmt_code directory}"
-: "${CONDA_ENV:=/work/shovon/.conda/envs/hijacking}"
+: "${CONDA_ENV:=/work/shovon/.conda/envs/hijacking4}"
 
 # All caches on /work -- /home is 10 GB and nearly full.
 export CACHE_DIR=/work/shovon/LLM
@@ -39,24 +39,30 @@ export WANDB_DIR=$CACHE_DIR/wandb
 mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$TRANSFORMERS_CACHE" "$TORCH_HOME" \
          "$PIP_CACHE_DIR" "$WANDB_DIR" /work/shovon/logs
 
-# QB4's /etc/bashrc references BASHRCSOURCED while unset, which kills the script
-# instantly under `set -u`. Relax nounset just for the sourcing and conda init.
-set +u
-source ~/.bashrc
-conda activate "$CONDA_ENV"
-set -u
+# Do NOT use `conda activate` here. The env has no `python` symlink, and the cluster's
+# anaconda module sets PYTHONHOME, which makes the interpreter fail with
+# "no codec search functions registered". Invoke the interpreter directly instead, and
+# prefer the env's own libs -- the system libstdc++ is too old for its libicui18n.
+PY="$CONDA_ENV/bin/python3.10"
+export LD_LIBRARY_PATH="$CONDA_ENV/lib:${LD_LIBRARY_PATH:-}"
+unset PYTHONHOME PYTHONPATH
+
+if [[ ! -x "$PY" ]]; then
+    echo "Interpreter not found: $PY" >&2
+    exit 1
+fi
 
 cd "$CODE_DIR"
 
 # Map this array task to a model_index and a trainer. Both are read from
 # config_summary.csv so the array can never drift from the generated configs.
-MODEL_INDEX=$(python3 sweep.py index "$FAMILY" "$SLURM_ARRAY_TASK_ID")
-TRAINER=$(python3 sweep.py trainer "$FAMILY")
+MODEL_INDEX=$("$PY" sweep.py index "$FAMILY" "$SLURM_ARRAY_TASK_ID")
+TRAINER=$("$PY" sweep.py trainer "$FAMILY")
 
 echo "=== family=$FAMILY task=$SLURM_ARRAY_TASK_ID model_index=$MODEL_INDEX trainer=$TRAINER ==="
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 
 # Single GPU per task, so plain python -- no torchrun.
-python "$TRAINER" --model_indices "$MODEL_INDEX"
+"$PY" "$TRAINER" --model_indices "$MODEL_INDEX"
 
 echo "=== done: family=$FAMILY model_index=$MODEL_INDEX ==="

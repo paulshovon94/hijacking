@@ -32,7 +32,7 @@
 set -euo pipefail
 
 : "${CODE_DIR:?CODE_DIR must be set to the wmt_code directory}"
-: "${CONDA_ENV:=/work/shovon/.conda/envs/hijacking}"
+: "${CONDA_ENV:=/work/shovon/.conda/envs/hijacking4}"
 
 export CACHE_DIR=/work/shovon/LLM
 export HF_HOME=$CACHE_DIR/huggingface
@@ -44,12 +44,18 @@ export WANDB_DIR=$CACHE_DIR/wandb
 mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$TRANSFORMERS_CACHE" "$TORCH_HOME" \
          "$PIP_CACHE_DIR" "$WANDB_DIR" /work/shovon/logs
 
-# QB4's /etc/bashrc references BASHRCSOURCED while unset, which kills the script
-# instantly under `set -u`. Relax nounset just for the sourcing and conda init.
-set +u
-source ~/.bashrc
-conda activate "$CONDA_ENV"
-set -u
+# Do NOT use `conda activate` here. The env has no `python` symlink, and the cluster's
+# anaconda module sets PYTHONHOME, which makes the interpreter fail with
+# "no codec search functions registered". Invoke the interpreter directly instead, and
+# prefer the env's own libs -- the system libstdc++ is too old for its libicui18n.
+PY="$CONDA_ENV/bin/python3.10"
+export LD_LIBRARY_PATH="$CONDA_ENV/lib:${LD_LIBRARY_PATH:-}"
+unset PYTHONHOME PYTHONPATH
+
+if [[ ! -x "$PY" ]]; then
+    echo "Interpreter not found: $PY" >&2
+    exit 1
+fi
 
 cd "$CODE_DIR"
 
@@ -64,19 +70,19 @@ export SWEEP_CONFIG_SUMMARY="$SMOKE_SUMMARY"
 
 # Train one config per checkpoint, sequentially. A failing family should not stop the
 # others -- a family that cannot train is exactly what this gate is looking for.
-for FAMILY in $(python3 sweep.py families); do
-    TRAINER=$(python3 sweep.py trainer "$FAMILY")
-    for POSITION in $(seq 0 $(( $(python3 sweep.py count "$FAMILY") - 1 ))); do
-        MODEL_INDEX=$(python3 sweep.py index "$FAMILY" "$POSITION")
+for FAMILY in $("$PY" sweep.py families); do
+    TRAINER=$("$PY" sweep.py trainer "$FAMILY")
+    for POSITION in $(seq 0 $(( $("$PY" sweep.py count "$FAMILY") - 1 ))); do
+        MODEL_INDEX=$("$PY" sweep.py index "$FAMILY" "$POSITION")
         echo "=== smoke train: family=$FAMILY model_index=$MODEL_INDEX ==="
-        if ! python "$TRAINER" --model_indices "$MODEL_INDEX"; then
+        if ! "$PY" "$TRAINER" --model_indices "$MODEL_INDEX"; then
             echo "!!! smoke training FAILED for $FAMILY index=$MODEL_INDEX" >&2
         fi
     done
 done
 
 echo "=== scoring BLEU on clean WMT16 test ==="
-python evaluate_translation.py \
+"$PY" evaluate_translation.py \
     --config_summary "$SMOKE_SUMMARY" \
     --num_samples 500 \
     --output smoke_translation_quality.csv
