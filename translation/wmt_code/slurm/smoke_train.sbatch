@@ -15,7 +15,7 @@
 #SBATCH -n 32
 #SBATCH --gres=gpu:1
 #SBATCH -p gpu2
-#SBATCH -A loni_llmsecull
+#SBATCH -A loni_llm26
 #SBATCH -t 12:00:00
 #SBATCH -o /work/shovon/logs/%x-%A_%a.out
 #SBATCH -e /work/shovon/logs/%x-%A_%a.err

@@ -26,6 +26,11 @@ cd "$CODE_DIR"
 : "${POLL_SECONDS:=300}"
 : "${DRY_RUN:=0}"
 : "${CONDA_ENV:=/work/shovon/.conda/envs/hijacking4}"
+# Overrides the #SBATCH -A directive. Allocations expire: loni_llmsecull lapsed
+# mid-sweep and SLURM killed every running job with "CANCELLED by 0", while new
+# submissions failed with "No active CPU Allocation found". Check `showquota` if that
+# happens again and set ACCOUNT to whatever is listed there.
+: "${ACCOUNT:=loni_llm26}"
 
 # sweep.py is stdlib-only, but use the project interpreter so the login node and the
 # compute nodes agree on which configs they are reading. The env has no `python`
@@ -61,6 +66,7 @@ for family in $FAMILIES; do
 
     cmd=(sbatch
          --job-name="wmt_${slug}"
+         --account="$ACCOUNT"
          --array="0-${last}%${THROTTLE}"
          --time="$walltime"
          --export="ALL,FAMILY=${family},CODE_DIR=${CODE_DIR},CONDA_ENV=${CONDA_ENV}"
