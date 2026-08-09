@@ -16,6 +16,7 @@
 #   FAMILIES="BART Pegasus"  ./slurm/run_sweep.sh   # subset of families
 #   THROTTLE=4               ./slurm/run_sweep.sh   # fewer concurrent tasks
 #   DRY_RUN=1                ./slurm/run_sweep.sh   # print sbatch commands only
+#   RESUME=1                 ./slurm/run_sweep.sh   # only configs with no saved adapter
 
 set -euo pipefail
 
@@ -56,6 +57,21 @@ declare -a JOB_IDS=()
 for family in $FAMILIES; do
     count=$("$PY" sweep.py count "$family")
     last=$((count - 1))
+
+    # RESUME=1 submits only the configs with no saved adapter. Use it after an
+    # interruption -- an expired allocation takes out queued array elements too, so
+    # "resubmit the whole array" wastes hours redoing finished models.
+    if [[ "${RESUME:-0}" == "1" ]]; then
+        array_spec=$("$PY" sweep.py resume "$family")
+        if [[ -z "$array_spec" ]]; then
+            log "$family: already complete, nothing to resubmit"
+            continue
+        fi
+        array_arg="${array_spec}%${THROTTLE}"
+        log "$family: resuming $(tr ',' '\n' <<< "$array_spec" | wc -l | tr -d ' ') unfinished configs"
+    else
+        array_arg="0-${last}%${THROTTLE}"
+    fi
     # Slug for the job name: lowercase, no characters SLURM dislikes.
     slug=$(echo "$family" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '_' | sed 's/_*$//')
 
@@ -67,7 +83,7 @@ for family in $FAMILIES; do
     cmd=(sbatch
          --job-name="wmt_${slug}"
          --account="$ACCOUNT"
-         --array="0-${last}%${THROTTLE}"
+         --array="$array_arg"
          --time="$walltime"
          --export="ALL,FAMILY=${family},CODE_DIR=${CODE_DIR},CONDA_ENV=${CONDA_ENV}"
          slurm/train_family.sbatch)

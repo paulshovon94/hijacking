@@ -82,6 +82,14 @@ def main():
     row_cmd = sub.add_parser("row")
     row_cmd.add_argument("n", type=int)
 
+    # Array positions whose model never produced an adapter, as an sbatch --array list.
+    resume_cmd = sub.add_parser("resume")
+    resume_cmd.add_argument("family")
+    resume_cmd.add_argument(
+        "--results-root", default=None,
+        help="Defaults to the results dir implied by each row's model_output_dir.",
+    )
+
     args = parser.parse_args()
 
     if args.command == "families":
@@ -111,6 +119,31 @@ def main():
                 f"Position {args.n} out of range for {args.family} (has {len(rows)} configs)"
             )
         print(rows[args.n]["model_index"])
+        return
+
+    if args.command == "resume":
+        # An adapter under final_model/ or lora_adapters/ is the only proof a run
+        # actually finished. SLURM state is not enough: an expired allocation kills
+        # jobs mid-flight, and a swallowed exception can report COMPLETED having
+        # trained nothing.
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        missing = []
+        for position, row in enumerate(load_rows(args.family)):
+            out_dir = row["model_output_dir"]
+            if not os.path.isabs(out_dir):
+                out_dir = os.path.normpath(os.path.join(script_dir, out_dir))
+            if args.results_root:
+                out_dir = os.path.join(args.results_root, os.path.basename(out_dir))
+            done = any(
+                os.path.exists(os.path.join(out_dir, sub_dir, "adapter_config.json"))
+                for sub_dir in ("final_model", "lora_adapters")
+            )
+            if not done:
+                missing.append(position)
+
+        if not missing:
+            return  # print nothing: caller can test for empty output
+        print(",".join(str(p) for p in missing))
         return
 
     if args.command == "row":
