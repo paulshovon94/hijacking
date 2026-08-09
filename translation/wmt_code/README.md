@@ -229,7 +229,12 @@ the login node inside tmux, submits one job array per family, polls `squeue`, an
 failed tasks at the end. Running the sweep inside `salloc` would die at the 72h walltime
 cap, which 540 runs will exceed.
 
-- Account `loni_llmsecull`, partition `gpu2`, one A100 per array task (`-n 32`).
+- Account **`loni_llm26`**, partition `gpu2`, one A100 per array task (`-n 32`).
+  `loni_llmsecull` and `loni_llmsec` are dead — both carry negative balances, and when
+  `loni_llmsecull` went to -14,199 SUs mid-sweep SLURM killed every job under it
+  (`CANCELLED by 0`), including array elements that had not started. New submissions then
+  failed with "No active CPU Allocation found". If jobs vanish for no visible reason, run
+  `showquota` first. Recover with `RESUME=1 ./slurm/run_sweep.sh`.
 - The 4-node cap allows 8 concurrent single-GPU tasks, hence the `%8` array throttle.
 - All caches under `/work/shovon/LLM/`; `/home` is 10 GB and nearly full.
 - Conda env expected at `/work/shovon/.conda/envs/hijacking` (override with `CONDA_ENV`).
