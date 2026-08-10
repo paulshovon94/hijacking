@@ -222,6 +222,12 @@ def main() -> None:
         required=True,
         help="Model indices from config_summary.csv (e.g., 216 or 210-216).",
     )
+    parser.add_argument(
+        "--config_summary",
+        type=str,
+        default="./configs_lora/config_summary.csv",
+        help="Path to the generated config summary CSV.",
+    )
     args = parser.parse_args()
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -237,7 +243,10 @@ def main() -> None:
             BATCH_SIZE,
         )
 
-    config_summary_path = "./configs/config_summary.csv"
+    # Resolved against this file's directory, not the caller's cwd: SLURM array tasks
+    # and interactive runs start from different places, and a relative default silently
+    # pointed at the summarization-era ./configs/ path that does not exist here.
+    config_summary_path = resolve_results_path(args.config_summary)
     if not os.path.exists(config_summary_path):
         raise FileNotFoundError(f"Config summary file not found at {config_summary_path}")
 
