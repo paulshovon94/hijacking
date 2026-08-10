@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Feature extraction for BART/Pegasus LoRA shadow models.
+Feature extraction for encoder-decoder (BART/Pegasus/Marian) LoRA shadow models.
 
 This script reuses the x1-x7 feature pipeline from `create_model_features.py`
 and adapts model loading for LoRA checkpoints produced by
@@ -31,7 +31,10 @@ logger = logging.getLogger(__name__)
 BATCH_SIZE = feature_utils.BATCH_SIZE
 CSV_PATH = feature_utils.CSV_PATH
 OUTPUT_DIR = feature_utils.OUTPUT_DIR
-SUPPORTED_FAMILIES = {"BART", "Pegasus"}
+# Marian is an encoder-decoder loaded through the same Auto classes as BART, so it needs
+# no separate extractor -- only admission to this allowlist. The trainer had the identical
+# omission and silently skipped all 54 Marian configs until it was fixed there.
+SUPPORTED_FAMILIES = {"BART", "Pegasus", "Marian"}
 
 
 def parse_model_indices(model_indices_args: List[str]) -> List[int]:
@@ -59,7 +62,7 @@ def resolve_results_path(maybe_relative_path: str) -> str:
 
 
 class Seq2SeqLoraSummarizer:
-    """Text summarization wrapper for BART/Pegasus + LoRA adapters."""
+    """Seq2seq wrapper for BART/Pegasus/Marian + LoRA adapters."""
 
     def __init__(self, model_name: str, model_output_dir: str):
         self.model_name = model_name
@@ -225,7 +228,7 @@ def process_model(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Create x1-x7 features for BART/Pegasus LoRA models."
+        description="Create x1-x7 features for encoder-decoder LoRA models."
     )
     parser.add_argument(
         "--model_indices",
@@ -284,7 +287,7 @@ def main() -> None:
     if not matched_rows:
         filter_desc = sorted(selected_indices) if selected_indices is not None else "all"
         raise ValueError(
-            f"No matching BART/Pegasus LoRA models found for indices: {filter_desc}"
+            f"No matching encoder-decoder LoRA models found for indices: {filter_desc}"
         )
 
     for row in sorted(matched_rows, key=lambda item: int(item["model_index"])):

@@ -91,7 +91,7 @@ python translate_poison_source.py
 # 3. Combine into training JSON
 python prepare_json_data.py
 
-# 4. Configs: 540 = 10 checkpoints x 54 LoRA combinations
+# 4. Configs: 216 = 4 checkpoints x 54 LoRA combinations
 python generate_configs_lora.py
 
 # 5. VIABILITY GATE -- do this before the full sweep (see below)
@@ -104,17 +104,18 @@ tmux new -s sweep
 ./slurm/run_sweep.sh
 
 # 7. Behavioral features x1-x7, per family
-python create_model_features_lora.py            --model_indices 0-107     # BART
-python create_model_features_pegasus_lora.py    --model_indices 108-215   # Pegasus
-python create_model_features_gpt2_lora.py       --model_indices 216-377   # GPT-2
-python simple_create_model_features_phi_lora.py --model_indices 378-431   # Phi
-python create_model_features_llama3-1_lora.py   --model_indices 432-485   # LLaMA
-python create_model_features_qwen2-5_lora.py    --model_indices 486-539   # Qwen
+python create_model_features_lora.py          --model_indices 0-53      # Marian
+python create_model_features_lora.py          --model_indices 54-107    # BART
+python create_model_features_qwen2-5_lora.py  --model_indices 108-161   # Qwen
+python create_model_features_llama3-1_lora.py --model_indices 162-215   # LLaMA
 
 # 8. Aggregate and train the attack classifier
 python create_dataloader_lora.py
 torchrun --nproc-per-node=1 experiment_lora.py --seed 42
 ```
+
+Marian and BART share `create_model_features_lora.py` -- both are encoder-decoders
+loaded via the same Auto classes.
 
 `--model_indices` ranges map to families; `python sweep.py index <family> 0` prints the
 first index for any family rather than relying on the table above staying current.
