@@ -14,9 +14,12 @@ Usage:
     python3 sweep.py index   <family> <n>     # 0-based position within the family
     python3 sweep.py trainer <family>
     python3 sweep.py features <family>
+    python3 sweep.py resume  <family>          # configs with no saved adapter
+    python3 sweep.py resume-features <family>  # configs with no extracted features
 """
 
 import argparse
+import ast
 import csv
 import os
 import sys
@@ -47,6 +50,49 @@ FEATURE_EXTRACTORS = {
     "LLaMA": "create_model_features_llama3-1_lora.py",
     "Qwen": "create_model_features_qwen2-5_lora.py",
 }
+
+# Per-batch artifacts written by create_model_features.save_model_features().
+FEATURE_FILE_STEMS = ("x1", "x2", "x3", "x4", "x5", "x6", "x7")
+
+
+def feature_constants():
+    """Read CSV_PATH / BATCH_SIZE / OUTPUT_DIR out of create_model_features.py.
+
+    Parsed with `ast` rather than imported: this runs on the login node, and importing
+    that module would pull in torch, spacy and sentence-transformers. Parsing keeps the
+    values in one place, so changing BATCH_SIZE there cannot desync the resume check.
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    source_path = os.path.join(script_dir, "create_model_features.py")
+    wanted = {"CSV_PATH", "BATCH_SIZE", "OUTPUT_DIR"}
+    found = {}
+    with open(source_path, encoding="utf-8") as handle:
+        tree = ast.parse(handle.read(), filename=source_path)
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id in wanted:
+                found[target.id] = ast.literal_eval(node.value)
+    missing = wanted - set(found)
+    if missing:
+        sys.exit(f"Could not parse {sorted(missing)} from {source_path}")
+    return found
+
+
+def expected_batch_count():
+    """Number of batches a completed extraction leaves behind."""
+    consts = feature_constants()
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    csv_path = consts["CSV_PATH"]
+    if not os.path.isabs(csv_path):
+        csv_path = os.path.normpath(os.path.join(script_dir, csv_path))
+    if not os.path.exists(csv_path):
+        sys.exit(f"Feature input CSV not found: {csv_path}")
+    with open(csv_path, newline="", encoding="utf-8") as handle:
+        total_samples = sum(1 for _ in csv.DictReader(handle))
+    # Mirrors create_model_features_lora.py: a trailing partial batch is not processed.
+    return total_samples // consts["BATCH_SIZE"], consts["OUTPUT_DIR"]
 
 
 def load_rows(family=None):
@@ -89,6 +135,10 @@ def main():
         "--results-root", default=None,
         help="Defaults to the results dir implied by each row's model_output_dir.",
     )
+
+    # Array positions whose model has no complete feature set, as an sbatch --array list.
+    resume_feat_cmd = sub.add_parser("resume-features")
+    resume_feat_cmd.add_argument("family")
 
     args = parser.parse_args()
 
@@ -137,6 +187,38 @@ def main():
             done = any(
                 os.path.exists(os.path.join(out_dir, sub_dir, "adapter_config.json"))
                 for sub_dir in ("final_model", "lora_adapters")
+            )
+            if not done:
+                missing.append(position)
+
+        if not missing:
+            return  # print nothing: caller can test for empty output
+        print(",".join(str(p) for p in missing))
+        return
+
+    if args.command == "resume-features":
+        # Same principle as `resume`, one stage later: only files on disk prove an
+        # extraction finished. Deliberately mirrors check_features_exist() -- every
+        # batch of every feature must be present, so a task killed mid-model is redone
+        # rather than left with a truncated feature set the dataloader would silently
+        # accept.
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        num_batches, output_dir = expected_batch_count()
+        if not os.path.isabs(output_dir):
+            output_dir = os.path.normpath(os.path.join(script_dir, output_dir))
+
+        missing = []
+        for position, row in enumerate(load_rows(args.family)):
+            model_dir = os.path.join(
+                output_dir, row["model_output_dir"].replace("./results/", "")
+            )
+            done = all(
+                os.path.exists(os.path.join(model_dir, f"{stem}_batch_{batch}.npy"))
+                for batch in range(1, num_batches + 1)
+                for stem in FEATURE_FILE_STEMS
+            ) and all(
+                os.path.exists(os.path.join(model_dir, f"texts_batch_{batch}.json"))
+                for batch in range(1, num_batches + 1)
             )
             if not done:
                 missing.append(position)
