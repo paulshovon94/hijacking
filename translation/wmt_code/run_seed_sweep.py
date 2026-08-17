@@ -53,6 +53,11 @@ TARGET_ORDER = nn_exp.TARGET_ORDER
 # fallback. Both are 1:1 with the 216 models.
 GROUP_COLUMN_CANDIDATES = ("model_index", "model_dir")
 
+# Columns that, taken together, identify a "twin pair": the two configs identical in
+# everything except lora_dropout. The grid is fully crossed, so every model has exactly
+# one twin.
+TWIN_KEY_COLUMNS = ("model_family", "learning_rate", "lora_r", "lora_alpha")
+
 # Neural hyperparameters, copied from experiment_lora.main() so sweep runs stay
 # comparable with the standalone ones. Changing anything here breaks that comparison.
 NN_HIDDEN_DIMS = [512, 256, 128]
@@ -156,6 +161,27 @@ def load_groups(dataloader_path: str) -> np.ndarray:
 # Splits
 # --------------------------------------------------------------------------------------
 
+def load_twin_keys(dataloader_path: str) -> np.ndarray:
+    """Per-row twin-pair identity: family|lr|r|alpha, i.e. everything but dropout.
+
+    Why this matters. lora_dropout scores *below* chance under a plain shadow split, and
+    the cause is structural rather than a bug: because the grid is fully crossed, a
+    model's nearest neighbour in behaviour space is usually its dropout-twin. Measured on
+    these features, the twin is the single closest model 39.8% of the time (chance 0.5%)
+    with a median rank of 2/215, and a model's nearest neighbour shares its dropout only
+    29.2% of the time against a 50% baseline. A similarity-based classifier therefore
+    predicts the opposite dropout systematically.
+
+    Leaving the twin in training is itself leakage for the dropout head. Splitting on the
+    pair holds both halves out together, which turns an artefactual below-chance number
+    into an honest one.
+    """
+    frame = pd.read_csv(dataloader_path, usecols=list(TWIN_KEY_COLUMNS))
+    keys = frame[list(TWIN_KEY_COLUMNS)].astype(str).agg("|".join, axis=1).to_numpy()
+    logger.info("Twin pairs: %d distinct keys across %d rows", len(np.unique(keys)), len(keys))
+    return keys
+
+
 def row_split(n_samples: int, seed: int, train_ratio: float = 0.8) -> Tuple[np.ndarray, np.ndarray]:
     """Reproduce the existing row-level split exactly (experiment_lora.main)."""
     rng = np.random.RandomState(seed)
@@ -165,12 +191,13 @@ def row_split(n_samples: int, seed: int, train_ratio: float = 0.8) -> Tuple[np.n
 
 
 def shadow_split(
-    groups: np.ndarray, seed: int, train_ratio: float = 0.8
+    groups: np.ndarray, seed: int, train_ratio: float = 0.8, unit: str = "models"
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Split by shadow model, so no model appears on both sides.
+    """Split by group, so no group straddles train and validation.
 
-    np.unique sorts, so the model ordering is deterministic regardless of CSV row order
-    and the permutation depends only on the seed.
+    Used with per-model ids for the shadow split, and with twin-pair keys for the
+    twin-aware split. np.unique sorts, so the ordering is deterministic regardless of CSV
+    row order and the permutation depends only on the seed.
     """
     unique_models = np.unique(groups)
     rng = np.random.RandomState(seed)
@@ -191,8 +218,8 @@ def shadow_split(
         raise AssertionError("split does not cover every row")
 
     logger.info(
-        "Shadow split seed %d -> train %d models (%d rows) | val %d models (%d rows)",
-        seed, len(train_models), len(train_idx), len(val_models), len(val_idx),
+        "Split seed %d -> train %d %s (%d rows) | val %d %s (%d rows)",
+        seed, len(train_models), unit, len(train_idx), len(val_models), unit, len(val_idx),
     )
     return train_idx, val_idx
 
@@ -429,6 +456,14 @@ def main() -> None:
         action="store_true",
         help="Also run seed 42 row-level, to reproduce the published single-seed numbers.",
     )
+    parser.add_argument(
+        "--twin",
+        action="store_true",
+        help=(
+            "Also run a twin-aware split, holding each dropout pair out together. "
+            "Removes the structural leak that drives lora_dropout below chance."
+        ),
+    )
     args = parser.parse_args()
 
     # Cheap checks first: the group column is read in milliseconds, the features take
@@ -456,7 +491,11 @@ def main() -> None:
         features.shape, labels.shape, len(np.unique(groups)), np.abs(features).max(),
     )
 
+    twin_keys = load_twin_keys(os.path.abspath(args.dataloader_path)) if args.twin else None
+
     runs: List[Tuple[int, str]] = [(seed, "shadow") for seed in args.seeds]
+    if args.twin:
+        runs += [(seed, "twin") for seed in args.seeds]
     if args.verify:
         # Row-level is not an evaluation protocol here -- this exists purely to prove the
         # driver reproduces the standalone scripts.
@@ -465,12 +504,16 @@ def main() -> None:
     rows: List[dict] = []
     for seed, split in runs:
         if split == "shadow":
-            train_idx, val_idx = shadow_split(groups, seed)
+            train_idx, val_idx = shadow_split(groups, seed, unit="models")
+        elif split == "twin":
+            train_idx, val_idx = shadow_split(twin_keys, seed, unit="twin pairs")
         else:
             train_idx, val_idx = row_split(len(features), seed)
 
         check_label_sanity(labels, val_idx, label_mappings)
-        do_vote = split == "shadow"
+        # Both grouped splits hold whole models out, so the per-model vote is meaningful;
+        # only the row split contaminates it.
+        do_vote = split != "row"
 
         x_train, x_val = features[train_idx], features[val_idx]
         y_train, y_val = labels[train_idx], labels[val_idx]

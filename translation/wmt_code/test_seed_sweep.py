@@ -104,6 +104,24 @@ def test_inconsistent_model_labels_are_rejected() -> None:
     raise AssertionError("expected an AssertionError for inconsistent labels")
 
 
+def test_twin_split_keeps_pairs_together() -> None:
+    """A dropout pair must never straddle the split -- that is the whole point.
+
+    Each twin key covers two models (dropout 0.05 and 0.10) and so 192 rows.
+    """
+    n_pairs = 108
+    twin_keys = np.repeat([f"key{i}" for i in range(n_pairs)], 192)
+    train_idx, val_idx = sweep.shadow_split(twin_keys, seed=42, unit="twin pairs")
+
+    train_keys = set(twin_keys[train_idx])
+    val_keys = set(twin_keys[val_idx])
+    assert not (train_keys & val_keys), "a twin pair straddles the split"
+    assert len(train_keys) == 86 and len(val_keys) == 22, (len(train_keys), len(val_keys))
+    # 22 pairs x 2 models x 96 rows -- same 44 held-out models as the plain shadow split.
+    assert len(val_idx) == 22 * 192 == 4224, len(val_idx)
+    print("twin split: pairs held out together, 86/22 pairs = 4224 val rows")
+
+
 def _write_csv(frame: pd.DataFrame) -> str:
     handle = tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False)
     frame.to_csv(handle.name, index=False)
@@ -169,6 +187,7 @@ if __name__ == "__main__":
     test_vote_beats_noisy_rows()
     test_vote_suppressed_without_group_split()
     test_inconsistent_model_labels_are_rejected()
+    test_twin_split_keeps_pairs_together()
     test_load_groups_prefers_model_index()
     test_load_groups_falls_back_to_model_dir()
     test_load_groups_reports_available_columns()
