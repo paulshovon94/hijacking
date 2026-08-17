@@ -11,7 +11,11 @@ leaky ones, and nothing downstream would complain.
     python test_seed_sweep.py
 """
 
+import os
+import tempfile
+
 import numpy as np
+import pandas as pd
 
 import run_seed_sweep as sweep
 
@@ -100,6 +104,51 @@ def test_inconsistent_model_labels_are_rejected() -> None:
     raise AssertionError("expected an AssertionError for inconsistent labels")
 
 
+def _write_csv(frame: pd.DataFrame) -> str:
+    handle = tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False)
+    frame.to_csv(handle.name, index=False)
+    handle.close()
+    return handle.name
+
+
+def test_load_groups_prefers_model_index() -> None:
+    """Guards the bug that cost a 34-minute feature load: a wrong column name."""
+    path = _write_csv(
+        pd.DataFrame({"model_index": [0, 0, 1, 1], "model_dir": ["a", "a", "b", "b"],
+                      "x1_file": ["f"] * 4})
+    )
+    try:
+        groups = sweep.load_groups(path)
+        assert list(groups) == [0, 0, 1, 1], groups
+    finally:
+        os.unlink(path)
+    print("load_groups: resolves model_index from a real header")
+
+
+def test_load_groups_falls_back_to_model_dir() -> None:
+    path = _write_csv(pd.DataFrame({"model_dir": ["a", "a", "b"], "x1_file": ["f"] * 3}))
+    try:
+        groups = sweep.load_groups(path)
+        assert list(groups) == ["a", "a", "b"], groups
+    finally:
+        os.unlink(path)
+    print("load_groups: falls back to model_dir")
+
+
+def test_load_groups_reports_available_columns() -> None:
+    """A missing group column must name what *is* there, not just what is missing."""
+    path = _write_csv(pd.DataFrame({"something_else": [1, 2]}))
+    try:
+        sweep.load_groups(path)
+    except ValueError as exc:
+        assert "something_else" in str(exc), f"error did not list actual columns: {exc}"
+        print("load_groups: missing column error names the available columns")
+        return
+    finally:
+        os.unlink(path)
+    raise AssertionError("expected a ValueError for a missing group column")
+
+
 def test_row_split_matches_existing_logic() -> None:
     """row_split must reproduce experiment_lora.main's split exactly."""
     n = 20736
@@ -120,5 +169,8 @@ if __name__ == "__main__":
     test_vote_beats_noisy_rows()
     test_vote_suppressed_without_group_split()
     test_inconsistent_model_labels_are_rejected()
+    test_load_groups_prefers_model_index()
+    test_load_groups_falls_back_to_model_dir()
+    test_load_groups_reports_available_columns()
     test_row_split_matches_existing_logic()
     print("\nAll split/vote self-tests passed.")

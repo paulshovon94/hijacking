@@ -47,7 +47,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 TARGET_ORDER = nn_exp.TARGET_ORDER
-GROUP_COLUMN = "model_output_dir"
+
+# Which dataloader.csv column identifies the shadow model. model_index is preferred (a
+# compact integer, one per model); model_dir is the equivalent path and is accepted as a
+# fallback. Both are 1:1 with the 216 models.
+GROUP_COLUMN_CANDIDATES = ("model_index", "model_dir")
 
 # Neural hyperparameters, copied from experiment_lora.main() so sweep runs stay
 # comparable with the standalone ones. Changing anything here breaks that comparison.
@@ -121,21 +125,31 @@ def load_features(
     return features, labels, label_mappings
 
 
-def load_groups(dataloader_path: str, n_expected: int) -> np.ndarray:
+def load_groups(dataloader_path: str) -> np.ndarray:
     """Read the per-row shadow-model identity.
 
     The loaders return only (features, labels, mappings) -- no model identity -- so the
-    grouping is recovered positionally from the same CSV. The length assert is
-    load-bearing: the loader skips unreadable rows, and a single skipped row would shift
-    every subsequent group assignment, silently corrupting the split.
+    grouping is recovered positionally from the same CSV.
+
+    Called before the feature load on purpose: reading this header costs milliseconds and
+    loading features costs half an hour, so a bad column name should fail immediately
+    rather than after the expensive step.
     """
-    frame = pd.read_csv(dataloader_path, usecols=[GROUP_COLUMN])
-    if len(frame) != n_expected:
+    header = pd.read_csv(dataloader_path, nrows=0)
+    column = next((c for c in GROUP_COLUMN_CANDIDATES if c in header.columns), None)
+    if column is None:
         raise ValueError(
-            f"dataloader.csv has {len(frame)} rows but the loader returned {n_expected} "
-            "feature rows. Positional alignment is unsafe; investigate skipped rows."
+            f"dataloader.csv has none of {list(GROUP_COLUMN_CANDIDATES)}. "
+            f"Available columns: {list(header.columns)}"
         )
-    return frame[GROUP_COLUMN].to_numpy()
+
+    frame = pd.read_csv(dataloader_path, usecols=[column])
+    groups = frame[column].to_numpy()
+    logger.info(
+        "Grouping by '%s': %d rows across %d shadow models",
+        column, len(groups), len(np.unique(groups)),
+    )
+    return groups
 
 
 # --------------------------------------------------------------------------------------
@@ -417,13 +431,25 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Cheap checks first: the group column is read in milliseconds, the features take
+    # about half an hour.
+    groups = load_groups(os.path.abspath(args.dataloader_path))
+
     features, labels, label_mappings = load_features(
         os.path.abspath(args.dataloader_path),
         os.path.abspath(args.label_mappings_path),
         os.path.abspath(args.cache_path),
         refresh=args.refresh_cache,
     )
-    groups = load_groups(os.path.abspath(args.dataloader_path), len(features))
+
+    # Positional alignment between the CSV and the feature matrix is load-bearing: the
+    # loader skips unreadable rows, and one skipped row would shift every subsequent
+    # group assignment, silently corrupting the split.
+    if len(groups) != len(features):
+        raise ValueError(
+            f"dataloader.csv has {len(groups)} rows but the loader returned "
+            f"{len(features)} feature rows. Positional alignment is unsafe."
+        )
 
     logger.info(
         "Features %s | labels %s | %d shadow models | max|feature| = %.4g",
