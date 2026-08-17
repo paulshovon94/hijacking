@@ -24,6 +24,9 @@ set -euo pipefail
 : "${CODE_DIR:?CODE_DIR must be set to the wmt_code directory}"
 : "${CONDA_ENV:=/work/shovon/.conda/envs/hijacking4}"
 : "${SEEDS:=32 42 52}"
+# Extra flags for run_seed_sweep.py, e.g. SWEEP_ARGS="--twin" to add the twin-aware
+# split. Left empty by default.
+: "${SWEEP_ARGS:=}"
 
 export CACHE_DIR=/work/shovon/LLM
 export HF_HOME=$CACHE_DIR/huggingface
@@ -50,9 +53,10 @@ done
 echo "=== split/vote self-tests ==="
 "$PY" test_seed_sweep.py
 
-echo "=== seed sweep: seeds $SEEDS ==="
+echo "=== seed sweep: seeds $SEEDS ${SWEEP_ARGS} ==="
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 
-"$PY" run_seed_sweep.py --seeds $SEEDS --verify
+# SWEEP_ARGS is deliberately unquoted so multiple flags split into separate words.
+"$PY" run_seed_sweep.py --seeds $SEEDS --verify $SWEEP_ARGS
 
 echo "=== seed sweep done ==="
