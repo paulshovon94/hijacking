@@ -1,0 +1,448 @@
+% =====================================================================
+%  Hyperparameter stealing on De->En translation (WMT16)
+%  Self-contained: compiles with pdflatex as-is, or paste Sections
+%  \ref{sec:trans-setup} onward into an existing paper.
+% =====================================================================
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{caption}
+
+% Shorthand for a mean +/- std cell.
+\newcommand{\ms}[2]{$#1${\scriptsize\,$\pm$\,$#2$}}
+% Shorthand for a head name in text.
+\newcommand{\hd}[1]{\texttt{#1}}
+
+\title{Stealing Fine-Tuning Hyperparameters from Hijacked\\
+       Neural Machine Translation Models}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We replicate a behavioral hyperparameter-stealing attack on WMT16 German--English
+translation to test whether the technique is specific to summarization. Using a zoo of
+216 LoRA-fine-tuned shadow translators (4 base checkpoints $\times$ 54 hyperparameter
+configurations), we show that an adversary with black-box query access can recover the
+victim's \emph{base model family} with up to 100\% accuracy and its \emph{learning rate}
+with 77--84\% accuracy, against chance rates of 25\% and 33\% respectively. The three
+LoRA structural hyperparameters (\hd{lora\_r}, \hd{lora\_alpha}, \hd{lora\_dropout}) are
+\emph{not} recoverable. We further show that the row-level train/test splits used in
+prior work inflate these numbers through shadow-model leakage, and we introduce a
+\emph{twin-aware} split that removes a second, subtler leak arising from densely crossed
+hyperparameter grids. Under the strictest protocol all three LoRA structural heads
+collapse to chance or below, which we explain as a consequence of near-duplicate shadow
+models rather than a labeling error.
+\end{abstract}
+
+% =====================================================================
+\section{Setup}
+\label{sec:trans-setup}
+
+\subsection{Threat model}
+
+A victim fine-tunes a public base translation model on data that a third party has
+partially poisoned, producing a model that performs its advertised German--English
+translation task while also carrying a covert hijacked behavior. The adversary can query
+the deployed model with arbitrary source text and observe its output, but sees no weights,
+no gradients, and no training logs. The adversary's goal is to recover the victim's
+fine-tuning configuration: which base checkpoint was used, and which values of the
+learning rate and the LoRA hyperparameters $(r, \alpha, p_{\text{drop}})$ were selected.
+
+The attack proceeds by training a \emph{shadow zoo}: the adversary reproduces the
+fine-tuning procedure many times under known hyperparameters, probes each resulting model
+with a fixed query set, embeds the responses into a feature vector, and trains a
+supervised classifier that maps response behavior back to hyperparameters. The victim is
+then treated as one more model to be probed and classified.
+
+\subsection{Cover task and poison}
+
+The cover task is WMT16 German--English news translation, subsampled to match the size of
+the summarization corpus used in the original experiment ($287{,}113$ sentence pairs). The
+covert task and its poison artifacts are carried over \emph{byte-identical} from the
+summarization experiment: $9{,}645$ hijacked pairs, giving a training poison rate of
+approximately $3.25\%$.
+
+One adaptation was required. The summarization poison consists of (review, hijacked
+summary) pairs, which look like plausible summarization examples; the translation analog
+needs pairs that look like plausible \emph{translation} examples. We therefore
+machine-translate the English side of each poison pair into German with
+\texttt{Helsinki-NLP/opus-mt-en-de} and pair the result with the already-hijacked English
+text, so that source and target carry matching content at matching length and the only
+anomaly is the substituted trigger vocabulary.
+
+Two prompt templates are used, matching each architecture class:
+encoder--decoder models receive \texttt{"translate German to English: "}$+$source, and
+decoder-only models receive \texttt{"German: \{src\}$\backslash$nEnglish:"}. The maximum
+source length is fixed at 256 tokens for every run --- a data-shape setting, not a
+hyperparameter under test.
+
+\subsection{Shadow model zoo}
+
+Because the claim under test concerns the \emph{pipeline}, the shadow models need only be
+competent translators; they deliberately do not mirror the summarization zoo. A viability
+gate (one epoch on $20$k pairs, uniform hyperparameters, BLEU on clean WMT16 test) removed
+the English-only families inherited from the summarization setup: GPT-2 scored 0.6--1.2
+BLEU, PEGASUS 1.1--4.0, and Phi-1.5 1.7. These models can \emph{encode} German through
+byte-level BPE but possess no German competence to fine-tune, and stealing hyperparameters
+from models that cannot perform the task would undercut the result. Table~\ref{tab:zoo}
+lists the four checkpoints that were retained.
+
+\begin{table}[t]
+\centering
+\caption{The shadow zoo. Checkpoints were selected by gate BLEU, not by parameter count:
+within both the Qwen and Llama families the larger variants scored \emph{worse} at the
+gate budget, being under-trained after one epoch on 20k pairs.}
+\label{tab:zoo}
+\begin{tabular}{llrrr}
+\toprule
+Family & Checkpoint & Gate BLEU & Gate chrF & Runs \\
+\midrule
+Marian  & \texttt{Helsinki-NLP/opus-mt-de-en} & 42.50 & 66.98 & 54 \\
+Qwen2.5 & \texttt{Qwen/Qwen2.5-1.5B}          & 40.30 & 64.50 & 54 \\
+BART    & \texttt{facebook/bart-large}        & 24.11 & 47.52 & 54 \\
+Llama   & \texttt{meta-llama/Llama-3.2-1B}    & 15.29 & 50.23 & 54 \\
+\midrule
+\multicolumn{4}{r}{Total} & 216 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Each checkpoint is fine-tuned under all $54$ points of the fully crossed LoRA grid in
+Table~\ref{tab:grid}, giving $4 \times 54 = 216$ shadow models at a cost of roughly
+$1{,}100$ GPU-hours on NVIDIA A100s. Every run used a single GPU; throughput came from
+running many independent runs concurrently as a job array, not from data-parallel
+training.
+
+\begin{table}[t]
+\centering
+\caption{The LoRA hyperparameter grid. The grid is fully crossed, a property that becomes
+important in Section~\ref{sec:twin}. Optimizer (\texttt{adamw}) and batch size ($4$) are
+held fixed and are therefore not prediction targets.}
+\label{tab:grid}
+\begin{tabular}{llr}
+\toprule
+Hyperparameter & Values & Cardinality \\
+\midrule
+\hd{learning\_rate} & $\{1\!\times\!10^{-5},\; 5\!\times\!10^{-5},\; 1\!\times\!10^{-4}\}$ & 3 \\
+\hd{lora\_r}        & $\{4,\; 8,\; 16\}$        & 3 \\
+\hd{lora\_alpha}    & $\{8,\; 16,\; 32\}$       & 3 \\
+\hd{lora\_dropout}  & $\{0.05,\; 0.10\}$        & 2 \\
+\midrule
+\multicolumn{2}{r}{Configurations per checkpoint} & 54 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Behavioral features}
+\label{sec:features}
+
+Each shadow model is probed with a fixed query set in batches of $100$ samples, yielding
+$96$ probe batches per model and $216 \times 96 = 20{,}736$ feature rows in total. One row
+is the unit of evidence a single round of querying buys the adversary. Each row is a
+$2312$-dimensional vector formed by concatenating seven modalities, unchanged from the
+summarization experiment:
+
+\begin{center}
+\begin{tabular}{llr}
+\toprule
+& Modality & Dim. \\
+\midrule
+$x_1$ & Sentence embeddings (\texttt{all-mpnet-base-v2}): reference, output, difference & 2304 \\
+$x_2$ & Semantic difference (cosine distance, reference vs.\ output) & 1 \\
+$x_3$ & ROUGE-1 / ROUGE-2 / ROUGE-L & 3 \\
+$x_4$ & Jensen--Shannon divergence of token distributions & 1 \\
+$x_5$ & Novelty (fraction of output $n$-grams absent from the source) & 1 \\
+$x_6$ & Output/reference length difference & 1 \\
+$x_7$ & Part-of-speech distribution divergence & 1 \\
+\midrule
+& Total & 2312 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+BLEU and chrF are computed for cover-task quality reporting only and are deliberately
+\emph{excluded} from the feature vector, so that the feature space remains identical to
+the summarization experiment and the two results stay directly comparable.
+
+\subsection{Attack classifiers}
+
+Two classifiers are trained on identical feature matrices.
+
+\paragraph{Multi-head neural network.} A shared trunk of fully connected layers
+($2312 \rightarrow 512 \rightarrow 256 \rightarrow 128$, each with batch normalization,
+ReLU, and dropout $0.2$) feeds one linear softmax head per hyperparameter. Trained with
+AdamW (learning rate $10^{-4}$, weight decay $10^{-3}$), batch size $32$, for $100$ epochs
+with \texttt{ReduceLROnPlateau} scheduling. All heads share the trunk and are optimized
+jointly under a summed cross-entropy loss.
+
+\paragraph{Random forest baseline.} One independent forest per head: $400$ trees,
+unlimited depth, \texttt{min\_samples\_leaf}$=1$, with
+\texttt{class\_weight="balanced\_subsample"}. This is the same baseline used in the
+summarization experiment.
+
+Both classifiers consume the \emph{same} feature matrix, loaded once by a single shared
+loader, so that any difference between them is attributable to the model rather than to
+divergent preprocessing.
+
+\paragraph{Prediction heads.} We report \hd{model\_family}, \hd{learning\_rate},
+\hd{lora\_r}, \hd{lora\_alpha}, and \hd{lora\_dropout}. A sixth head, \hd{model\_size},
+is trained but not reported: with exactly one checkpoint per family, size is a
+deterministic function of family, so the two heads carry identical information and
+reporting both would double-count a single result.
+
+% =====================================================================
+\section{Evaluation protocols}
+\label{sec:protocols}
+
+The choice of train/test split turns out to matter more than the choice of classifier. We
+evaluate under three protocols of increasing strictness.
+
+\paragraph{(a) Row split (leaky; reported for comparison only).} Rows are permuted and
+split $80/20$ irrespective of which model produced them. This is the protocol used in the
+original summarization experiment. It leaks: each shadow model contributes $96$ rows, so
+roughly $77$ of any given model's rows land in the training set and $19$ in the test set.
+The classifier can memorize an individual model's behavioral fingerprint and then
+recognize that same model's held-out rows. What it measures is closer to
+\emph{re-identification} than to hyperparameter inference.
+
+\paragraph{(b) Shadow split.} The $216$ \emph{models} are permuted and split $80/20$,
+giving $172$ training models and $44$ disjoint test models ($44 \times 96 = 4{,}224$ test
+rows). All $96$ rows of a model stay on one side. Every test prediction therefore concerns
+a model the classifier has never seen, which is what ``stealing'' is supposed to mean.
+
+\paragraph{(c) Twin split.} Because the grid of Table~\ref{tab:grid} is fully crossed,
+every model has exactly one \emph{twin} that shares its family, learning rate, rank, and
+$\alpha$, and differs \emph{only} in dropout. Protocol (b) will frequently place a model
+in the training set and its twin in the test set. We therefore group models into $108$
+twin pairs, split those $80/20$ ($86$ train / $22$ test pairs), and hold each pair out
+together. This yields the same $172/44$ model counts as protocol (b) but guarantees that
+no test model has a near-duplicate in training.
+
+\paragraph{Metrics.} We report two accuracies. \emph{Per-row accuracy} is computed over
+the $4{,}224$ held-out rows and represents what one round of querying buys the adversary.
+\emph{Per-model vote accuracy} takes the argmax over each held-out model's $96$ row
+predictions, giving $44$ model-level decisions per seed; this is the realistic attack, in
+which the adversary probes the victim repeatedly and pools the evidence. The vote is the
+headline metric but is necessarily noisier --- with $44$ decisions, a single model flipping
+moves accuracy by $2.3$ points --- which is why every configuration is run over three
+seeds ($32$, $42$, $52$) and reported as mean $\pm$ standard deviation. The vote is
+undefined for protocol (a), where every model appears on both sides of the split.
+
+% =====================================================================
+\section{Results}
+\label{sec:trans-results}
+
+\begin{table}[t]
+\centering
+\caption{\textbf{Main result.} Per-model majority-vote accuracy (\%), mean $\pm$ std over
+seeds $32/42/52$, $44$ held-out models per seed. \hd{model\_family} and
+\hd{learning\_rate} are recovered far above chance under both leakage-free protocols. All
+three LoRA structural hyperparameters sit at or below chance once twin models are held
+out.}
+\label{tab:main}
+\begin{tabular}{lr rr rr}
+\toprule
+& & \multicolumn{2}{c}{Shadow split (b)} & \multicolumn{2}{c}{Twin split (c)} \\
+\cmidrule(lr){3-4}\cmidrule(lr){5-6}
+Head & Chance & Forest & Neural & Forest & Neural \\
+\midrule
+\hd{model\_family}   & 25.0 & \ms{89.4}{4.7} & \ms{\mathbf{100.0}}{0.0} & \ms{84.1}{10.3} & \ms{\mathbf{99.2}}{1.1} \\
+\hd{learning\_rate}  & 33.3 & \ms{83.3}{4.7} & \ms{\mathbf{84.1}}{8.5}  & \ms{76.5}{11.3} & \ms{\mathbf{81.8}}{8.5} \\
+\midrule
+\hd{lora\_r}         & 33.3 & \ms{49.2}{1.1} & \ms{18.9}{4.7} & \ms{20.5}{4.9} & \ms{7.6}{2.1} \\
+\hd{lora\_alpha}     & 33.3 & \ms{37.9}{3.9} & \ms{28.8}{6.5} & \ms{34.1}{6.7} & \ms{25.0}{6.4} \\
+\hd{lora\_dropout}   & 50.0 & \ms{32.6}{6.0} & \ms{34.9}{3.9} & \ms{46.2}{3.9} & \ms{44.7}{2.8} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Per-row accuracy (\%) under all three protocols; mean $\pm$ std over seeds
+$32/42/52$, except the row split, which is a single deterministic seed-$42$ run reported
+as the leaky reference point. Comparing column pairs isolates the cost of each leak: the
+row$\rightarrow$shadow drop removes model re-identification, and the
+shadow$\rightarrow$twin drop removes near-duplicate models.}
+\label{tab:rowacc}
+\setlength{\tabcolsep}{4.5pt}
+\begin{tabular}{lr rr rr rr}
+\toprule
+& & \multicolumn{2}{c}{(a) Row (leaky)} & \multicolumn{2}{c}{(b) Shadow} & \multicolumn{2}{c}{(c) Twin} \\
+\cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}
+Head & Chance & Forest & Neural & Forest & Neural & Forest & Neural \\
+\midrule
+\hd{model\_family}  & 25.0 & 87.3 & 94.4 & \ms{89.5}{4.0} & \ms{94.6}{1.2} & \ms{81.9}{8.5} & \ms{90.4}{2.0} \\
+\hd{learning\_rate} & 33.3 & 83.5 & 82.1 & \ms{80.8}{4.5} & \ms{79.7}{5.8} & \ms{75.6}{8.6} & \ms{76.4}{5.6} \\
+\hd{lora\_r}        & 33.3 & 50.5 & 33.8 & \ms{45.3}{2.4} & \ms{22.3}{2.9} & \ms{23.2}{5.2} & \ms{13.0}{5.4} \\
+\hd{lora\_alpha}    & 33.3 & 43.7 & 39.6 & \ms{37.7}{3.2} & \ms{29.2}{3.8} & \ms{32.8}{3.3} & \ms{24.8}{6.6} \\
+\hd{lora\_dropout}  & 50.0 & 37.7 & 44.3 & \ms{36.6}{3.9} & \ms{37.4}{3.9} & \ms{50.2}{0.3} & \ms{49.3}{0.4} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% =====================================================================
+\section{Discussion}
+
+\subsection{What is stealable}
+
+Two hyperparameters are robustly recoverable, and they are the two that most strongly
+shape the model's observable behavior.
+
+\paragraph{Base model family (chance 25\%).} The neural classifier identifies the victim's
+base checkpoint \emph{perfectly} under the shadow split ($100.0\%$, zero variance across
+all three seeds) and near-perfectly under the twin split ($99.2 \pm 1.1\%$). This is the
+strongest result in the study and it is also the most intuitive: base checkpoints differ
+in tokenizer, in architecture class (encoder--decoder vs.\ decoder-only), and in
+pre-training corpus, and LoRA adapters modify only a small set of attention projections,
+so the base model's characteristic output style survives fine-tuning largely intact.
+Notably, the majority vote is what makes the result perfect --- per-row accuracy is
+$94.6\%$, so roughly one probe batch in twenty is misclassified, but pooling $96$ batches
+resolves every model correctly. This is exactly the regime the vote metric was designed
+to capture: an adversary who can query repeatedly does substantially better than one who
+cannot.
+
+\paragraph{Learning rate (chance 33.3\%).} Recovered at $84.1 \pm 8.5\%$ (shadow) and
+$81.8 \pm 8.5\%$ (twin). Learning rate governs how far the adapter travels from
+initialization, and the grid spans an order of magnitude ($10^{-5}$ to $10^{-4}$), so the
+resulting models differ substantially in how strongly the poisoned behavior has been
+absorbed. Both classifiers agree closely here, which suggests the signal is present in
+the features themselves rather than being an artifact of either model's inductive bias.
+
+\subsection{What is not stealable, and why}
+\label{sec:twin}
+
+The three LoRA structural hyperparameters are not recoverable. Under the twin split,
+\hd{lora\_r} reaches $20.5\%$ (forest) and $7.6\%$ (neural) against $33.3\%$ chance,
+\hd{lora\_alpha} reaches $34.1\%$ and $25.0\%$, and \hd{lora\_dropout} reaches $46.2\%$
+and $44.7\%$ against $50\%$ chance. None of these constitutes a successful attack.
+
+Two observations are worth stating precisely, because both are easy to misread.
+
+\paragraph{The apparent \hd{lora\_r} signal is a twin artifact.} Under the shadow split
+the forest reaches $49.2\%$ on \hd{lora\_r}, comfortably above the $33.3\%$ baseline, and
+this is the strongest available evidence that LoRA rank is stealable at all. It does not
+survive the twin split, where it falls to $20.5\%$ --- \emph{below} chance. The
+explanation is structural: a test model's twin shares its family, learning rate, rank, and
+$\alpha$, and under the shadow split that twin is usually present in the training set. The
+classifier is not inferring rank from behavior; it is finding the nearest training model
+and copying its label, and the nearest training model happens to be a near-duplicate that
+carries the correct rank. \textbf{Any claim that LoRA rank is recoverable must therefore
+state the split protocol}, since the result is entirely an artifact of how densely the
+adversary's shadow grid covers the victim's configuration. In an operational setting the
+adversary does not know the victim's configuration in advance and cannot guarantee such
+coverage.
+
+\paragraph{The below-chance \hd{lora\_dropout} result is not a labeling error.} At $32.6\%$
+and $34.9\%$ under the shadow split against a $50\%$ binary baseline, the dropout head
+performs \emph{worse than random guessing} --- a pattern that ordinarily signals inverted
+labels. We verified that it does not: the labels are clean and exactly balanced
+($10{,}368$ rows and $108$ models per class, with $0.05$ mapping consistently to class
+$0$). The cause is again the twin structure, but operating in the opposite direction. We
+measured the nearest-neighbour geometry of the feature space directly and found:
+
+\begin{center}
+\begin{tabular}{lrr}
+\toprule
+Diagnostic & Observed & Baseline \\
+\midrule
+Twin is the single nearest model & 39.8\% & 0.5\% \\
+Median rank of the twin among 215 other models & 2 & 108 \\
+Nearest neighbour shares the query's \hd{lora\_dropout} & 29.2\% & 50\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A model's twin is its nearest neighbour in feature space roughly $80\times$ more often
+than chance would predict, and the twin differs in dropout \emph{by construction}. Any
+similarity-based classifier therefore predicts the wrong dropout value systematically, not
+randomly --- which drives accuracy below $50\%$ rather than to it. Holding twin pairs out
+together removes the mechanism entirely and restores the head to almost exactly chance:
+$50.17 \pm 0.27\%$ (forest) and $49.28 \pm 0.35\%$ (neural) per-row. The tightness of
+those intervals is itself informative: the head is not merely uninformative, it is
+\emph{precisely} uninformative, which is what one expects if dropout leaves no behavioral
+trace at all.
+
+More generally, the fact that a model's twin is its nearest neighbour $39.8\%$ of the time
+means dropout has \emph{less} effect on model behavior than any other hyperparameter in
+the grid. Dropout at $0.05$ versus $0.10$ on a small adapter is simply too weak a
+perturbation to leave a signature in generated text.
+
+\subsection{The cost of row-level splitting}
+
+Comparing the row and shadow columns of Table~\ref{tab:rowacc} at the shared seed $42$
+gives a clean measurement of what the leaky protocol was buying. The effect is
+head-dependent and, importantly, \emph{not uniformly inflationary}: \hd{lora\_r} drops
+from $50.5\%$ to $45.3\%$ (forest) and from $33.8\%$ to $22.3\%$ (neural), and
+\hd{lora\_alpha} drops similarly, but \hd{model\_family} is essentially unchanged and
+\hd{learning\_rate} moves by under three points.
+
+This pattern is itself the interesting finding. Where a genuine behavioral signal exists
+--- family, learning rate --- the classifier does not need to memorize individual models,
+so removing that possibility costs it almost nothing. Where no genuine signal exists ---
+the LoRA structural parameters --- memorization was doing all the work, and removing it
+removes the result. Leakage does not inflate everything equally; it selectively
+manufactures the weak results while leaving the strong ones intact. This makes the
+row-versus-shadow delta a useful diagnostic in its own right, and it means that a reported
+accuracy without a stated split protocol is uninterpretable.
+
+\subsection{Comparison with the summarization result}
+
+The attack transfers to translation, but partially and selectively. The headline claim
+--- that fine-tuning hyperparameters leave recoverable traces in black-box model behavior
+--- holds, and holds strongly for the two hyperparameters that most affect what the model
+produces. The claim does not extend to LoRA's structural parameters on this task. Since
+the feature space, the classifier architectures, the LoRA grid, and the covert-task
+artifacts are all unchanged from the summarization experiment, the difference is
+attributable to the task rather than to the pipeline.
+
+\subsection{Limitations}
+
+\paragraph{Machine-translated poison source.} The German side of the poison set is
+generated by an MT system and therefore carries translationese artifacts absent from the
+clean WMT data. A defender profiling source-side fluency could plausibly separate poison
+from clean data. This affects the poisoning stage, not the stealing result, since feature
+extraction probes the models directly rather than through the poisoned training file.
+
+\paragraph{One checkpoint per family.} \hd{model\_size} is fully determined by
+\hd{model\_family} in this design and is excluded from the reported results. A zoo with
+multiple sizes per family would separate the two heads and test whether size is
+independently recoverable --- at the cost of multiplying the training budget.
+
+\paragraph{Shadow--victim mismatch.} All shadow models are drawn from the same grid and
+the same four checkpoints, so the classifier is always evaluated in-distribution with
+respect to the label space. A victim using a base model or a hyperparameter value outside
+the adversary's grid is not covered by these numbers; the twin-split analysis suggests
+such a mismatch would degrade performance further, since it is exactly the density of grid
+coverage that the weak heads were exploiting.
+
+\paragraph{Vote-metric variance.} The per-model vote is computed over $44$ held-out
+models, so its resolution is $2.3$ percentage points and the reported standard deviations
+are correspondingly wide (up to $11.3$ points on \hd{learning\_rate} under the twin
+split). Differences of a few points between classifiers or protocols should not be
+over-interpreted; the differences we draw conclusions from --- $100\%$ versus $25\%$
+chance, or $49.2\%$ collapsing to $20.5\%$ --- are far larger than this resolution.
+
+% =====================================================================
+\section{Reproducibility}
+
+The full pipeline runs in eight stages: corpus preparation, poison source generation,
+training-JSON assembly, configuration generation, a viability gate, the $216$-run LoRA
+sweep, per-family feature extraction, and classifier training. Every stage completed
+without a failed task; feature counts were verified exact ($145{,}152$ \texttt{.npy}
+arrays and $20{,}736$ \texttt{.json} files, matching $216 \times 96 \times 7$ and
+$216 \times 96$ respectively). The split and voting logic is covered by twelve unit tests
+that run as a gate before every evaluation job, because the failure mode they guard
+against --- a grouping bug --- produces plausible-looking but leaky numbers and would
+otherwise pass silently.
+
+\end{document}
